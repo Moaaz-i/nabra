@@ -761,6 +761,46 @@ export default function App() {
     [],
   );
 
+  // One definition of the two device pickers, reused by the full panel and by
+  // the compact bar. Duplicating them let the two views drift apart the last
+  // time a device option was added.
+  const deviceSelects = (
+    <>
+      <label>
+        الإدخال — المايك الأصلي
+        <select
+          value={inputId}
+          onChange={(e) => setInputId(e.target.value)}
+          disabled={running}
+        >
+          {inputs.length === 0 && <option value="">لا توجد أجهزة</option>}
+          {inputs.map((device) => (
+            <option key={device.deviceId} value={device.deviceId}>
+              {device.label || "مايك بدون اسم"}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label>
+        الإخراج — المايك الوهمي
+        <select
+          value={outputId}
+          onChange={(e) => setOutputId(e.target.value)}
+          disabled={running}
+        >
+          {outputs.length === 0 && <option value="">لا توجد أجهزة</option>}
+          {outputs.map((device) => (
+            <option key={device.deviceId} value={device.deviceId}>
+              {isVirtualDevice(device.label) ? "● وهمي — " : ""}
+              {device.label || "مخرج بدون اسم"}
+            </option>
+          ))}
+        </select>
+      </label>
+    </>
+  );
+
   return (
     <div className={`app ${prefs.compact ? "compact" : ""}`}>
       <header className="topbar">
@@ -824,6 +864,37 @@ export default function App() {
         </div>
       </header>
 
+      {/* الوضع المصغّر يخفي لوحة الأجهزة كاملة، فيبقى هذا الشريط وحده هو طريق
+          لتغيير المايك أو المخرج أو الوصول لصفحة التثبيت أثناء البث. */}
+      {prefs.compact && (
+        <div className="compact-bar" role="group" aria-label="الأجهزة">
+          {deviceSelects}
+          {/* اللوحة الكاملة مخفية هنا، فلا بدّ لشريط مصغّر من حمل زر التحميل
+              نفسه وإلا بقي المستخدم بلا أجهزة في الوضع المصغّر. */}
+          <button
+            type="button"
+            className="btn ghost small"
+            onClick={() => void loadDevices(true)}
+          >
+            {ready ? "تحديث الأجهزة" : "السماح وتحميل الأجهزة"}
+          </button>
+          <div className={`compact-bar-status ${hasVirtualOut ? "ok" : ""}`}>
+            <span
+              className={`dot ${hasVirtualOut ? "ok" : "warn"}`}
+              aria-hidden="true"
+            />
+            <span>{hasVirtualOut ? "تم رصد مايك وهمي" : hint.title}</span>
+            <button
+              type="button"
+              className="btn ghost small"
+              onClick={() => openExternal(virtualDriverUrl(platform))}
+            >
+              صفحة التثبيت الرسمية ↗
+            </button>
+          </div>
+        </div>
+      )}
+
       <main className="grid">
         <section className="panel">
           <h2>الأجهزة والمسار</h2>
@@ -849,38 +920,7 @@ export default function App() {
             </button>
           )}
 
-          <label>
-            الإدخال — المايك الأصلي
-            <select
-              value={inputId}
-              onChange={(e) => setInputId(e.target.value)}
-              disabled={running}
-            >
-              {inputs.length === 0 && <option value="">لا توجد أجهزة</option>}
-              {inputs.map((device) => (
-                <option key={device.deviceId} value={device.deviceId}>
-                  {device.label || "مايك بدون اسم"}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            الإخراج — المايك الوهمي
-            <select
-              value={outputId}
-              onChange={(e) => setOutputId(e.target.value)}
-              disabled={running}
-            >
-              {outputs.length === 0 && <option value="">لا توجد أجهزة</option>}
-              {outputs.map((device) => (
-                <option key={device.deviceId} value={device.deviceId}>
-                  {isVirtualDevice(device.label) ? "● وهمي — " : ""}
-                  {device.label || "مخرج بدون اسم"}
-                </option>
-              ))}
-            </select>
-          </label>
+          {deviceSelects}
 
           <div className={`hint ${hasVirtualOut ? "ok" : ""}`}>
             <strong>{hasVirtualOut ? "تم رصد مايك وهمي" : hint.title}</strong>

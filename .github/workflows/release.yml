@@ -1,0 +1,93 @@
+# يبني مُثبّتات ويندوز وماك ولينكس على حواسيب GitHub، ثم ترفعها جميعًا في
+# إصدار واحد عند دفع وسم `v*`. يُشغَّل يدويًا أيضًا من تبويب Actions لبناء
+# تجريبي بلا إصدار.
+name: الإصدارات
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ويندوز x64 + arm64
+            os: windows-latest
+            script: dist:win:all
+          - name: ماك arm64 + x64
+            os: macos-latest
+            script: dist:mac:all
+          - name: لينكس x64
+            os: ubuntu-latest
+            script: dist:linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: تثبيت الاعتماديات
+        run: npm ci
+
+      # تُشغَّل الفحوصات على كل نظام: سكربتا الاختبار يمرّان على Node مباشرة،
+      # فكسرهما الخاص بنظام بعينه يجب أن يوقف البناء قبل أن يصل إلى المستخدم.
+      - name: فحص الأنواع واللينت والاختبارات
+        run: |
+          npm run lint
+          npm test
+          npx tsc -b
+
+      - name: بناء المُثبّتات
+        run: npm run ${{ matrix.script }}
+        env:
+          # بلا شهادة توقيع على حواسيب GitHub؛ يمنع هذا البحث عنها وإيقاف البناء.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.os }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.AppImage
+            release/*.blockmap
+            release/*.yml
+            release/*.yaml
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: إنشاء الإصدار
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+
+      - name: عرض ما سيُرفع
+        run: ls -lh installers/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: installers/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

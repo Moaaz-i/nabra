@@ -15,6 +15,7 @@
     "dist:win:all": "npm run build && electron-builder --win --x64 --arm64",
     "dist:mac": "npm run build && electron-builder --mac --arm64",
     "dist:mac:x64": "npm run build && electron-builder --mac --x64",
+    "dist:mac:all": "npm run build && electron-builder --mac --arm64 --x64",
     "dist:linux": "npm run build && electron-builder --linux --x64",
     "lint": "oxlint",
     "test": "node scripts/pv-test.cjs && node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/ts-hooks.mjs scripts/dsp-test.mjs"

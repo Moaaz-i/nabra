@@ -639,6 +639,66 @@ select:disabled,
   display: none;
 }
 
+/* الوضع المصغّر يخفي اللوحة الأولى كاملة؛ هذا الشريط يبقي المايك والمخرج
+   وزر التثبيت في متناول اليد أثناء البث دون فتح اللوحة. */
+.compact-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.compact-bar label {
+  flex: 1 1 180px;
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.compact-bar select {
+  width: 100%;
+  min-width: 0;
+}
+
+.compact-bar-status {
+  flex: 1 1 240px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.compact-bar-status span:not(.dot) {
+  flex: 1;
+}
+
+.compact-bar .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.compact-bar .dot.ok {
+  background: #3ecfc0;
+}
+
+.compact-bar .dot.warn {
+  background: #e0b56a;
+}
+
+.compact-bar .btn {
+  flex: none;
+}
+
 .diag {
   margin-top: 12px;
   padding: 12px;
