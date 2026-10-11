@@ -1,0 +1,95 @@
+{
+  "name": "nabra",
+  "private": true,
+  "version": "1.0.0",
+  "description": "موجّه صوت تكيّفي من المايك الأصلي إلى مايك وهمي",
+  "author": "Nabra",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:win:arm64": "npm run build && electron-builder --win --arm64",
+    "dist:win:all": "npm run build && electron-builder --win --x64 --arm64",
+    "dist:mac": "npm run build && electron-builder --mac --arm64",
+    "dist:mac:x64": "npm run build && electron-builder --mac --x64",
+    "dist:linux": "npm run build && electron-builder --linux --x64",
+    "lint": "oxlint",
+    "test": "node scripts/pv-test.cjs && node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/ts-hooks.mjs scripts/dsp-test.mjs"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.1.0",
+    "electron": "^41.0.0",
+    "electron-builder": "^26.8.1",
+    "oxlint": "^1.79.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2",
+    "vite-plugin-electron": "^1.1.1"
+  },
+  "build": {
+    "appId": "com.nabra.voice",
+    "productName": "Nabra",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "build/icon.png"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "moaaz-i",
+        "repo": "nabra"
+      }
+    ],
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "نبرة",
+      "unicode": true,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.music",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "نبرة يحتاج إلى المايك الأصلي لمعالجة الصوت وإرساله إلى المايك الوهمي."
+      }
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "icon": "build/icon.png"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="markGrad" x1="0" y1="0" x2="1" y2="1" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#f2cf8c"/>
+      <stop offset="0.5" stop-color="#e0b56a"/>
+      <stop offset="1" stop-color="#3ecfc0"/>
+    </linearGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="28" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <g filter="url(#glow)">
+    <path
+      d="M160 512h92l46-150 86 316 82-382 86 382 86-316 46 150h184"
+      fill="none" stroke="url(#markGrad)" stroke-width="64"
+      stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

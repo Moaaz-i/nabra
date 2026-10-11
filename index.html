@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>نبرة — موجّه الصوت</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="splash">
+      <div class="splash-inner">
+        <div class="splash-mark">
+          <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="markGrad" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#efc47a"/>
+                <stop offset="1" stop-color="#3ecfc0"/>
+              </linearGradient>
+            </defs>
+            <rect width="64" height="64" rx="16" fill="#10131a"/>
+            <path d="M8 32h6l4-12 6 24 6-28 6 28 6-24 4 12h6"
+              fill="none" stroke="url(#markGrad)" stroke-width="3.4"
+              stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="48" cy="16" r="4" fill="#3ecfc0" opacity="0.9"/>
+            <circle cx="14" cy="50" r="3" fill="#efc47a" opacity="0.7"/>
+          </svg>
+        </div>
+        <h2 class="splash-title">نبرة</h2>
+        <p class="splash-tag">موجّه الصوت التكيّفي</p>
+        <div class="splash-bar"><i></i></div>
+      </div>
+    </div>
+    <style>
+      #splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background:
+          radial-gradient(900px 420px at 75% -10%, rgba(224,181,106,0.12), transparent),
+          radial-gradient(700px 380px at 20% 110%, rgba(62,207,192,0.09), transparent),
+          #08090d;
+        font-family: 'IBM Plex Sans Arabic', 'Segoe UI', sans-serif;
+        transition: opacity .5s ease, visibility .5s ease;
+      }
+      #splash.hide { opacity: 0; visibility: hidden; }
+      .splash-inner { text-align: center; transform: translateY(-8px); }
+      .splash-mark {
+        width: 88px; height: 88px; margin: 0 auto 22px;
+        filter: drop-shadow(0 0 34px rgba(224,181,106,0.35));
+        animation: splashFloat 2.4s ease-in-out infinite;
+      }
+      .splash-mark svg { width: 100%; height: 100%; }
+      .splash-title {
+        margin: 0; font-size: 30px; letter-spacing: .12em; color: #e8ecf1; font-weight: 700;
+      }
+      .splash-tag {
+        margin: 6px 0 26px; color: #8b93a7; font-size: 14px; letter-spacing: .02em;
+      }
+      .splash-bar {
+        width: 180px; height: 4px; margin: 0 auto; border-radius: 99px;
+        background: #161b24; overflow: hidden;
+      }
+      .splash-bar i {
+        display: block; height: 100%; width: 0;
+        background: linear-gradient(90deg, #efc47a, #3ecfc0);
+        animation: splashLoad 1.8s ease forwards; border-radius: 99px;
+      }
+      @keyframes splashFloat { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+      @keyframes splashLoad {
+        0% { width: 0 } 60% { width: 55% } 100% { width: 100% }
+      }
+    </style>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
