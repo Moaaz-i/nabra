@@ -28,7 +28,7 @@ export function virtualHint(platform: string): { title: string; body: string } {
   if (platform === "win32") {
     return {
       title: "ويندوز — ثبّت VB-Audio Virtual Cable",
-      body: "بعد التثبيت اختر «CABLE Output» كمخرج هنا، ثم في ديسكورد أو زووم اختر «CABLE Input» كمايك.",
+      body: "بعد التثبيت اختر «CABLE Input» كمخرج هنا في نبرة، ثم في ديسكورد أو زووم اختر «CABLE Output» كمايك.",
     };
   }
   return {

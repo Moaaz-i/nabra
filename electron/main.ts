@@ -145,8 +145,19 @@ async function checkForUpdates() {
 }
 
 function resolveIcon(): string | undefined {
-  const iconPath = path.join(__dirname, "../build/icon.png");
-  if (isDev || fs.existsSync(iconPath)) return iconPath;
+  const isWin = process.platform === "win32";
+  const names = isWin ? ["icon.ico", "icon.png"] : ["icon.png", "icon.ico"];
+  for (const name of names) {
+    const candidates = [
+      path.join(__dirname, "../build", name),
+      path.join(process.resourcesPath ?? "", "build", name),
+      path.join(process.resourcesPath ?? "", name),
+      path.join(app.getAppPath(), "build", name),
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) return p;
+    }
+  }
   return undefined;
 }
 

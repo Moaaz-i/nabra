@@ -13,6 +13,7 @@
     "build": "tsc -b && vite build",
     "dist": "npm run build && electron-builder --publish never",
     "dist:win": "npm run build && electron-builder --win --x64 --publish never",
+    "dist:win:portable": "npm run build && electron-builder --win portable --x64 --publish never",
     "dist:win:arm64": "npm run build && electron-builder --win --arm64 --publish never",
     "dist:win:all": "npm run build && electron-builder --win --x64 --arm64 --publish never",
     "dist:mac": "npm run build && electron-builder --mac --arm64 --publish never",
@@ -52,7 +53,8 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "build/icon.png"
+      "build/icon.png",
+      "build/icon.ico"
     ],
     "asar": true,
     "win": {
