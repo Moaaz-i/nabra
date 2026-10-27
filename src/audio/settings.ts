@@ -9,6 +9,7 @@ export type VoiceMode = "adaptive" | "manual";
 export type VoiceScale = "chromatic" | "major" | "minor";
 export type LatencyMode = "standard" | "low";
 export type PitchMethodChoice = "auto" | "yin" | "mcm";
+export type MicModel = "none" | "sm7b" | "u87" | "c414" | "re20";
 
 export type VoiceSettings = {
   mode: VoiceMode;
@@ -75,6 +76,16 @@ export type VoiceSettings = {
   radioMix: number;
   /** 3D Stereo Widener effect (0 = mono, 1 = max spatial width) */
   stereoWidth: number;
+  /** Legendary Studio Microphone Emulation */
+  micModel: MicModel;
+  /** Analog Tube Warmth & Harmonic Saturation (0 = clean, 1 = rich velvety warmth) */
+  tubeWarmth: number;
+  /** Broadcast Vocal Air & High Harmonics Exciter (0 = off, 1 = ultra crystal sheen) */
+  vocalAir: number;
+  /** Studio Booth Acoustic Isolation & De-Reverb (0 = off, 1 = anechoic booth) */
+  boothIsolation: number;
+  /** Intelligent 3-Band Vocal Rider (0 = off, 1 = seamless dynamic leveling) */
+  vocalRider: number;
 };
 
 export const defaultSettings = (): VoiceSettings => ({
@@ -131,6 +142,11 @@ export const defaultSettings = (): VoiceSettings => ({
   radioEnabled: false,
   radioMix: 0.85,
   stereoWidth: 0,
+  micModel: "none",
+  tubeWarmth: 0,
+  vocalAir: 0,
+  boothIsolation: 0,
+  vocalRider: 0,
 });
 
 /**
@@ -170,6 +186,10 @@ export const SETTING_RANGES = {
   robotRate: [20, 250],
   radioMix: [0, 1],
   stereoWidth: [0, 1],
+  tubeWarmth: [0, 1],
+  vocalAir: [0, 1],
+  boothIsolation: [0, 1],
+  vocalRider: [0, 1],
 } as const satisfies Partial<
   Record<keyof VoiceSettings, readonly [number, number]>
 >;
@@ -179,6 +199,7 @@ export const SETTING_ENUMS = {
   scale: ["chromatic", "major", "minor"],
   detector: ["auto", "yin", "mcm"],
   latencyMode: ["standard", "low"],
+  micModel: ["none", "sm7b", "u87", "c414", "re20"],
 } as const satisfies Partial<
   Record<keyof VoiceSettings, readonly string[]>
 >;

@@ -25,6 +25,12 @@ import { loadVad } from "./vadAssets";
 import { createRnnoiseNode } from "./rnnoiseAssets";
 import vadWorkletSource from "./vadWorklet.cjs?raw";
 import { detectPitch, rms, rmsToDb } from "./yin";
+import {
+  MicrophoneModeler,
+  AnalogTubeWarmth,
+  VocalAirExciter,
+  StudioBoothIsolator,
+} from "./studioProcessors";
 
 const PV_LOW = { fftSize: 2048, hop: 256 };
 const PV_STANDARD = { fftSize: 4096, hop: 512 };
@@ -203,6 +209,11 @@ export class VoiceRouter {
   private robotWetGain: GainNode | null = null;
   private radioDryGain: GainNode | null = null;
   private radioWetGain: GainNode | null = null;
+  // Legendary Studio processors
+  private micModeler: MicrophoneModeler | null = null;
+  private tubeWarmth: AnalogTubeWarmth | null = null;
+  private vocalAirExciter: VocalAirExciter | null = null;
+  private boothIsolator: StudioBoothIsolator | null = null;
   // Anti-Feedback protection
   private feedbackDuckUntil = 0;
   private feedbackDetected = false;
@@ -468,10 +479,24 @@ export class VoiceRouter {
       limiter.attack.value = 0.003;
       limiter.release.value = 0.16;
 
-      // Processed path: mic -> filters -> gain -> AGC -> gate -> pitch/EQ/dyn.
+      // Studio room isolation & mic modeling
+      const boothIsolator = new StudioBoothIsolator(ctx);
+      const micModeler = new MicrophoneModeler(ctx);
+      this.boothIsolator = boothIsolator;
+      this.micModeler = micModeler;
+
+      // Analog tube warmth & broadcast air exciter
+      const tubeWarmth = new AnalogTubeWarmth(ctx);
+      const vocalAirExciter = new VocalAirExciter(ctx);
+      this.tubeWarmth = tubeWarmth;
+      this.vocalAirExciter = vocalAirExciter;
+
+      // Processed path: mic -> filters -> room de-mud -> mic modeling -> gain -> AGC -> gate -> pitch/EQ/dyn.
       source.connect(highpass);
       highpass.connect(lowpass);
-      lowpass.connect(inputGain);
+      lowpass.connect(boothIsolator.input);
+      boothIsolator.output.connect(micModeler.input);
+      micModeler.output.connect(inputGain);
       inputGain.connect(preampGain);
       preampGain.connect(agcGain);
       agcGain.connect(analyserIn);
@@ -511,7 +536,9 @@ export class VoiceRouter {
       presencePeak.connect(airShelf);
       airShelf.connect(deessPeak);
       deessPeak.connect(compressor);
-      compressor.connect(processedGain);
+      compressor.connect(tubeWarmth.input);
+      tubeWarmth.output.connect(vocalAirExciter.input);
+      vocalAirExciter.output.connect(processedGain);
 
       // Character effects: Robot Ring Modulator & Walkie-Talkie Radio
       const robotDryGain = ctx.createGain();
@@ -873,6 +900,22 @@ export class VoiceRouter {
     this.robotWetGain = null;
     this.radioDryGain = null;
     this.radioWetGain = null;
+    if (this.boothIsolator) {
+      this.boothIsolator.dispose();
+      this.boothIsolator = null;
+    }
+    if (this.micModeler) {
+      this.micModeler.dispose();
+      this.micModeler = null;
+    }
+    if (this.tubeWarmth) {
+      this.tubeWarmth.dispose();
+      this.tubeWarmth = null;
+    }
+    if (this.vocalAirExciter) {
+      this.vocalAirExciter.dispose();
+      this.vocalAirExciter = null;
+    }
     this.feedbackDuckUntil = 0;
     this.feedbackDetected = false;
     this.feedbackFrames = 0;
@@ -1049,6 +1092,12 @@ export class VoiceRouter {
     if (this.toneWidener) {
       this.toneWidener.width.setTargetAtTime(Math.max(0, Math.min(1, s.stereoWidth)), now, 0.02);
     }
+
+    // Legendary Studio Processors
+    this.micModeler?.setModel(s.micModel, now);
+    this.tubeWarmth?.setWarmth(s.tubeWarmth, now);
+    this.vocalAirExciter?.setAir(s.vocalAir, now);
+    this.boothIsolator?.setIsolation(s.boothIsolation, now);
 
     this.scheduleReverb(s.reverbTime);
   }
@@ -1234,20 +1283,24 @@ export class VoiceRouter {
     // noise floor *to* it, and then every word after the pause is measured
     // against a background that has been amplified by as much as the room was
     // quieter than the voice.
-    if (this.settings.agc && rmsDb > AGC_NOISE_FLOOR_DB && speaking) {
-      const error = AGC_TARGET_DB - rmsDb;
-      // These two coefficients were written as per-frame steps tuned at 60 fps.
-      // Converted to a rate they keep the identical response at any frame rate.
-      const k = error > 0 ? AGC_K_UP : AGC_K_DOWN;
+    // AGC / Intelligent Vocal Rider steers the level towards target without pumping
+    const riderActive = this.settings.vocalRider > 0.02;
+    if ((this.settings.agc || riderActive) && rmsDb > AGC_NOISE_FLOOR_DB && speaking) {
+      const targetDb = riderActive ? -18 : AGC_TARGET_DB;
+      const error = targetDb - rmsDb;
+      const speedMult = riderActive ? (0.6 + 0.4 * this.settings.vocalRider) : 1;
+      const k = (error > 0 ? AGC_K_UP : AGC_K_DOWN) * speedMult;
       this.agcDb += error * (1 - (1 - k) ** (dt * 60));
-      this.agcDb = Math.max(AGC_MIN_DB, Math.min(AGC_MAX_DB, this.agcDb));
-    } else if (!this.settings.agc) {
+      const maxRange = riderActive ? Math.max(AGC_MAX_DB, 10 * this.settings.vocalRider) : AGC_MAX_DB;
+      const minRange = riderActive ? Math.min(AGC_MIN_DB, -10 * this.settings.vocalRider) : AGC_MIN_DB;
+      this.agcDb = Math.max(minRange, Math.min(maxRange, this.agcDb));
+    } else if (!this.settings.agc && !riderActive) {
       this.agcDb += (0 - this.agcDb) * Math.min(1, dt * 4);
     }
     this.agcGain?.gain.setTargetAtTime(
       dbToGain(this.agcDb),
       this.ctx?.currentTime ?? 0,
-      0.05,
+      riderActive ? 0.08 : 0.05,
     );
 
     if (this.settings.gateEnabled && this.gateGain) {

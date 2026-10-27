@@ -131,7 +131,7 @@ type Saved = {
   settings?: Partial<VoiceSettings>;
 };
 
-type EngineTab = "pitch" | "tone" | "effects" | "dyn" | "isolation";
+type EngineTab = "pitch" | "mic" | "tone" | "effects" | "dyn" | "isolation";
 
 function loadSaved(): Saved {
   try {
@@ -1498,35 +1498,42 @@ export default function App() {
               className={tab === "pitch" ? "on" : ""}
               onClick={() => setTab("pitch")}
             >
-              طبقة
+              🎚️ نغمة وطبقة
+            </button>
+            <button
+              type="button"
+              className={tab === "mic" ? "on" : ""}
+              onClick={() => setTab("mic")}
+            >
+              🎙️ استوديو المايكات
             </button>
             <button
               type="button"
               className={tab === "tone" ? "on" : ""}
               onClick={() => setTab("tone")}
             >
-              طابع
-            </button>
-            <button
-              type="button"
-              className={tab === "effects" ? "on" : ""}
-              onClick={() => setTab("effects")}
-            >
-              تأثيرات
+              💎 صفاء ودفء
             </button>
             <button
               type="button"
               className={tab === "dyn" ? "on" : ""}
               onClick={() => setTab("dyn")}
             >
-              ديناميك
+              ⚖️ ديناميك وركوب
+            </button>
+            <button
+              type="button"
+              className={tab === "effects" ? "on" : ""}
+              onClick={() => setTab("effects")}
+            >
+              🌌 مؤثرات وأبعاد
             </button>
             <button
               type="button"
               className={tab === "isolation" ? "on" : ""}
               onClick={() => setTab("isolation")}
             >
-              عزل ونقاء 🛡️
+              🛡️ عزل وذكاء
             </button>
           </div>
 
@@ -1675,53 +1682,250 @@ export default function App() {
             </>
           )}
 
+          {tab === "mic" && (
+            <div className="mic-locker">
+              <div className="mic-locker-intro">
+                <h3>🎙️ استوديو نمذجة المايكات الأسطورية</h3>
+                <p>
+                  إعادة تشكيل الاستجابة الترددية للمايك ومحاكاة أشهر مايكات البودكاست والإذاعة والاستوديوهات العالمية بدقة تناظرية فائقة.
+                </p>
+              </div>
+
+              <div className="mic-cards-grid">
+                <div
+                  className={`mic-card ${settings.micModel === "sm7b" ? "active" : ""}`}
+                  onClick={() => patch({ micModel: "sm7b" })}
+                >
+                  <div className="mic-card-top">
+                    <span className="mic-icon">🎙️</span>
+                    <span className="mic-badge popular">الأشهر إذاعياً</span>
+                  </div>
+                  <h4>Shure SM7B</h4>
+                  <p className="mic-desc">
+                    أسطورة البودكاست والاستوديوهات. نغمة عريضة ودافئة مع كبح طنين الغرفة وحضور إذاعي ساحر.
+                  </p>
+                  <div className="mic-tags">
+                    <span>قرب إذاعي Proximity</span>
+                    <span>كبح الطنين</span>
+                    <span>حضور إذاعي 4.8kHz</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`btn small ${settings.micModel === "sm7b" ? "primary" : "ghost"}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      patch({ micModel: "sm7b" });
+                    }}
+                  >
+                    {settings.micModel === "sm7b" ? "✓ مفعّل حالياً" : "تطبيق الآن"}
+                  </button>
+                </div>
+
+                <div
+                  className={`mic-card ${settings.micModel === "u87" ? "active" : ""}`}
+                  onClick={() => patch({ micModel: "u87" })}
+                >
+                  <div className="mic-card-top">
+                    <span className="mic-icon">💎</span>
+                    <span className="mic-badge gold">فخامة كوندنسر</span>
+                  </div>
+                  <h4>Neumann U87</h4>
+                  <p className="mic-desc">
+                    المعيار الذهبي للتعليق الصوتي والغناء في كبرى استوديوهات العالم. شيمر وهوائية بلورية مفتوحة.
+                  </p>
+                  <div className="mic-tags">
+                    <span>شيمر هوائي 10.5kHz</span>
+                    <span>وضوح حوار نقي</span>
+                    <span>تفاصيل بلورية</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`btn small ${settings.micModel === "u87" ? "primary" : "ghost"}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      patch({ micModel: "u87" });
+                    }}
+                  >
+                    {settings.micModel === "u87" ? "✓ مفعّل حالياً" : "تطبيق الآن"}
+                  </button>
+                </div>
+
+                <div
+                  className={`mic-card ${settings.micModel === "re20" ? "active" : ""}`}
+                  onClick={() => patch({ micModel: "re20" })}
+                >
+                  <div className="mic-card-top">
+                    <span className="mic-icon">📻</span>
+                    <span className="mic-badge cyan">Variable-D</span>
+                  </div>
+                  <h4>Electro-Voice RE20</h4>
+                  <p className="mic-desc">
+                    الصوت الإذاعي للراديو ومحطات الأخبار العالمية. حوار قوي وثابت لا يتأثر باقترابك أو ابتعادك.
+                  </p>
+                  <div className="mic-tags">
+                    <span>ثبات المسافة</span>
+                    <span>اختراق الضجيج</span>
+                    <span>إذاعة محترفة</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`btn small ${settings.micModel === "re20" ? "primary" : "ghost"}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      patch({ micModel: "re20" });
+                    }}
+                  >
+                    {settings.micModel === "re20" ? "✓ مفعّل حالياً" : "تطبيق الآن"}
+                  </button>
+                </div>
+
+                <div
+                  className={`mic-card ${settings.micModel === "c414" ? "active" : ""}`}
+                  onClick={() => patch({ micModel: "c414" })}
+                >
+                  <div className="mic-card-top">
+                    <span className="mic-icon">✨</span>
+                    <span className="mic-badge purple">أثيري نقي</span>
+                  </div>
+                  <h4>AKG C414</h4>
+                  <p className="mic-desc">
+                    أعلى مستويات الشفافية الصوتية والانفتاح الثلاثي الأبعاد. نغمات هوائية منعشة واستجابة أفقية.
+                  </p>
+                  <div className="mic-tags">
+                    <span>أبعاد ثلاثية</span>
+                    <span>ترددات عليا مفتوحة</span>
+                    <span>صوت طبيعي فائق</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`btn small ${settings.micModel === "c414" ? "primary" : "ghost"}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      patch({ micModel: "c414" });
+                    }}
+                  >
+                    {settings.micModel === "c414" ? "✓ مفعّل حالياً" : "تطبيق الآن"}
+                  </button>
+                </div>
+
+                <div
+                  className={`mic-card ${settings.micModel === "none" ? "active" : ""}`}
+                  onClick={() => patch({ micModel: "none" })}
+                >
+                  <div className="mic-card-top">
+                    <span className="mic-icon">🎙️</span>
+                    <span className="mic-badge neutral">محايد أصلي</span>
+                  </div>
+                  <h4>مايك محايد (Direct Bypass)</h4>
+                  <p className="mic-desc">
+                    صوت المايك الطبيعي والافتراضي بدون أي إعادة تشكيل أو تعديل لخصائص التردد الأصلية.
+                  </p>
+                  <div className="mic-tags">
+                    <span>استجابة مسطحة</span>
+                    <span>بدون تلوين</span>
+                  </div>
+                  <button
+                    type="button"
+                    className={`btn small ${settings.micModel === "none" ? "primary" : "ghost"}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      patch({ micModel: "none" });
+                    }}
+                  >
+                    {settings.micModel === "none" ? "✓ مفعّل حالياً" : "تطبيق الآن"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {tab === "tone" && (
             <>
-              <Slider
-                label="تمرير عالٍ"
-                min={20}
-                max={300}
-                step={1}
-                value={settings.highpassHz}
-                format={(v) => `${v.toFixed(0)} Hz`}
-                onChange={(highpassHz) => patch({ highpassHz })}
-              />
-              <Slider
-                label="تمرير منخفض"
-                min={2500}
-                max={18000}
-                step={50}
-                value={settings.lowpassHz}
-                format={(v) => `${v.toFixed(0)} Hz`}
-                onChange={(lowpassHz) => patch({ lowpassHz })}
-              />
-              <Slider
-                label="دفء"
-                min={-6}
-                max={8}
-                step={0.1}
-                value={settings.warmth}
-                format={(v) => `${signed(v)} dB`}
-                onChange={(warmth) => patch({ warmth })}
-              />
-              <Slider
-                label="حضور"
-                min={-4}
-                max={8}
-                step={0.1}
-                value={settings.presence}
-                format={(v) => `${signed(v)} dB`}
-                onChange={(presence) => patch({ presence })}
-              />
-              <Slider
-                label="تهدئة الصفير"
-                min={0}
-                max={1}
-                step={0.01}
-                value={settings.deess}
-                format={(v) => `${Math.round(v * 100)}٪`}
-                onChange={(deess) => patch({ deess })}
-              />
+              <div className="studio-card-highlight">
+                <div className="card-title-row">
+                  <span className="icon">🔥</span>
+                  <div>
+                    <h4>الدفء التناظري والصفاء الإذاعي الأسطوري</h4>
+                    <p>تشبّع أنبوبي 12AX7 وبريق هوائي Exciter يمنح صوتك نعومة وفخامة استوديوهات الماسترينج.</p>
+                  </div>
+                </div>
+
+                <Slider
+                  label="🔥 دفء التيوب التناظري (12AX7 Tube Saturation)"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={settings.tubeWarmth}
+                  format={(v) => `${Math.round(v * 100)}٪`}
+                  onChange={(tubeWarmth) => patch({ tubeWarmth })}
+                />
+                <Slider
+                  label="✨ بريق وهواء الصوت (Broadcast Air 10k-16k Exciter)"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={settings.vocalAir}
+                  format={(v) => `${Math.round(v * 100)}٪`}
+                  onChange={(vocalAir) => patch({ vocalAir })}
+                />
+                <Slider
+                  label="🛡️ عزل ارتداد وصندوق الغرفة (Studio Booth De-Mud)"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={settings.boothIsolation}
+                  format={(v) => `${Math.round(v * 100)}٪`}
+                  onChange={(boothIsolation) => patch({ boothIsolation })}
+                />
+              </div>
+
+              <div className="eq-group">
+                <Slider
+                  label="تمرير عالٍ (Low-Cut)"
+                  min={20}
+                  max={300}
+                  step={1}
+                  value={settings.highpassHz}
+                  format={(v) => `${v.toFixed(0)} Hz`}
+                  onChange={(highpassHz) => patch({ highpassHz })}
+                />
+                <Slider
+                  label="تمرير منخفض (High-Cut)"
+                  min={2500}
+                  max={18000}
+                  step={50}
+                  value={settings.lowpassHz}
+                  format={(v) => `${v.toFixed(0)} Hz`}
+                  onChange={(lowpassHz) => patch({ lowpassHz })}
+                />
+                <Slider
+                  label="دفء (Warmth EQ)"
+                  min={-6}
+                  max={8}
+                  step={0.1}
+                  value={settings.warmth}
+                  format={(v) => `${signed(v)} dB`}
+                  onChange={(warmth) => patch({ warmth })}
+                />
+                <Slider
+                  label="حضور (Presence EQ)"
+                  min={-4}
+                  max={8}
+                  step={0.1}
+                  value={settings.presence}
+                  format={(v) => `${signed(v)} dB`}
+                  onChange={(presence) => patch({ presence })}
+                />
+                <Slider
+                  label="تهدئة الصفير (De-Esser)"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={settings.deess}
+                  format={(v) => `${Math.round(v * 100)}٪`}
+                  onChange={(deess) => patch({ deess })}
+                />
+              </div>
               <div className="char-fx-card">
                 <label className="check">
                   <input
@@ -1900,8 +2104,28 @@ export default function App() {
 
           {tab === "dyn" && (
             <>
+              <div className="studio-card-highlight">
+                <div className="card-title-row">
+                  <span className="icon">🎚️</span>
+                  <div>
+                    <h4>راكب الصوت الذكي (Intelligent Vocal Rider)</h4>
+                    <p>موازنة ديناميكية ناعمة تلقائية تعزز الكلمات الهامسة وتكبح الصرخات المفاجئة بأسلوب إذاعي.</p>
+                  </div>
+                </div>
+
+                <Slider
+                  label="🎚️ راكب الصوت الذكي (Vocal Rider)"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={settings.vocalRider}
+                  format={(v) => (v === 0 ? "متوقف" : `${Math.round(v * 100)}٪ توازن ذكي`)}
+                  onChange={(vocalRider) => patch({ vocalRider })}
+                />
+              </div>
+
               <Slider
-                label="ضغط"
+                label="ضاغط الاستوديو الناعم (Studio Compressor)"
                 min={0}
                 max={1}
                 step={0.01}
