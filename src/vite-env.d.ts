@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import type { NabraBridge } from "../../electron/preload";
+import type { NabraBridge } from "./nabra-bridge";
 
 declare global {
   interface Window {

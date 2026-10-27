@@ -42,22 +42,44 @@ export type DeviceLists = {
   outputs: MediaDeviceInfo[];
 };
 
-export function rawMicConstraints(deviceId?: string): MediaTrackConstraints {
+export type MicConstraintOptions = {
+  echoCancellation?: boolean;
+  noiseSuppression?: boolean;
+  autoGainControl?: boolean;
+};
+
+export function micConstraints(
+  deviceId?: string,
+  options?: MicConstraintOptions,
+): MediaTrackConstraints {
   const audio: MediaTrackConstraints = {
-    echoCancellation: false,
-    noiseSuppression: false,
-    autoGainControl: false,
+    echoCancellation: options?.echoCancellation ?? false,
+    noiseSuppression: options?.noiseSuppression ?? false,
+    autoGainControl: options?.autoGainControl ?? false,
   };
   if (deviceId) audio.deviceId = { exact: deviceId };
   return audio;
 }
 
-export async function forceRawCapture(stream: MediaStream): Promise<void> {
+export function rawMicConstraints(deviceId?: string): MediaTrackConstraints {
+  return micConstraints(deviceId, {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+  });
+}
+
+export async function applyMicConstraints(
+  stream: MediaStream,
+  options?: MicConstraintOptions,
+): Promise<void> {
+  const echoCancellation = options?.echoCancellation ?? false;
+  const noiseSuppression = options?.noiseSuppression ?? false;
   for (const track of stream.getAudioTracks()) {
     try {
       await track.applyConstraints({
-        echoCancellation: false,
-        noiseSuppression: false,
+        echoCancellation,
+        noiseSuppression,
         autoGainControl: false,
       });
     } catch {
@@ -66,27 +88,40 @@ export async function forceRawCapture(stream: MediaStream): Promise<void> {
   }
 }
 
+export async function forceRawCapture(stream: MediaStream): Promise<void> {
+  return applyMicConstraints(stream, {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+  });
+}
+
 export async function openMic(
   deviceId?: string,
+  options?: MicConstraintOptions,
 ): Promise<MediaStream> {
-  const strict = rawMicConstraints(deviceId);
+  const strict = micConstraints(deviceId, options);
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: strict,
       video: false,
     });
-    await forceRawCapture(stream);
+    await applyMicConstraints(stream, options);
     return stream;
   } catch (err) {
     const name = err instanceof DOMException ? err.name : "";
     if (name === "OverconstrainedError" || name === "NotFoundError") {
-      const relaxed: MediaTrackConstraints = { channelCount: 1 };
+      const relaxed: MediaTrackConstraints = {
+        channelCount: 1,
+        echoCancellation: options?.echoCancellation ?? false,
+        noiseSuppression: options?.noiseSuppression ?? false,
+      };
       if (deviceId) relaxed.deviceId = { exact: deviceId };
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: relaxed,
         video: false,
       });
-      await forceRawCapture(stream);
+      await applyMicConstraints(stream, options);
       return stream;
     }
     throw err;

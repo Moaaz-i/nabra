@@ -47,7 +47,9 @@ function decimate(
     const j = i * DECIMATION;
     data[i] = (buffer[j]! + buffer[j + 1]!) * 0.5;
   }
-  return { data, sampleRate: sampleRate / DECIMATION };
+  // The scratch buffer only ever grows; hand back exactly the filled part so
+  // a shorter window after a longer one cannot analyse stale samples.
+  return { data: data.subarray(0, out), sampleRate: sampleRate / DECIMATION };
 }
 
 /** Shared tail: reject estimates outside the vocal range or non-finite. */

@@ -5,12 +5,9 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>نبرة — موجّه الصوت</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+    <!-- Self-hosted (public/fonts.css): no runtime request leaves the app, so
+         opening the UI never leaks a font fetch to a third party. -->
+    <link href="/fonts.css" rel="stylesheet" />
   </head>
   <body>
     <div id="root"></div>

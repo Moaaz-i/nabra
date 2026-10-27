@@ -231,6 +231,76 @@ export const STUDIO_PRESETS: StudioPreset[] = [
       agc: true,
     },
   },
+  {
+    id: "cyber_bot",
+    name: "سايبورغ AI",
+    hint: "روبوت ذكاء اصطناعي رنان",
+    settings: {
+      mode: "manual",
+      manualSemitones: -2,
+      formant: 2,
+      robotEnabled: true,
+      robotMix: 0.9,
+      robotRate: 65,
+      compress: 0.5,
+      stereoWidth: 0.4,
+    },
+  },
+  {
+    id: "walkie_talkie",
+    name: "لاسلكي عسكري",
+    hint: "راديو تكتيكي مع نقاء تام",
+    settings: {
+      mode: "manual",
+      manualSemitones: 0,
+      radioEnabled: true,
+      radioMix: 0.95,
+      distortion: 0.2,
+      compress: 0.6,
+    },
+  },
+  {
+    id: "chipmunk",
+    name: "سنجاب كرتوني",
+    hint: "طبقة عالية مرحة وكرتونية",
+    settings: {
+      mode: "manual",
+      manualSemitones: 12,
+      formant: 8,
+      highpassHz: 140,
+      presence: 4,
+      compress: 0.4,
+    },
+  },
+  {
+    id: "golden_broadcast",
+    name: "مذيع ذهبي 3D",
+    hint: "بودكاست استوديو سينمائي عريض",
+    settings: {
+      mode: "manual",
+      manualSemitones: -2,
+      formant: -1.2,
+      warmth: 4,
+      presence: 3,
+      compress: 0.45,
+      stereoWidth: 0.7,
+    },
+  },
+  {
+    id: "astral_phantom",
+    name: "شبح فضائي",
+    hint: "أثيري مع ريفراب وكورس متألق",
+    settings: {
+      mode: "manual",
+      manualSemitones: -4,
+      formant: 1.5,
+      reverbMix: 0.45,
+      reverbTime: 3.2,
+      chorusMix: 0.6,
+      chorusRate: 0.8,
+      stereoWidth: 0.85,
+    },
+  },
 ];
 
 const CUSTOM_STORAGE_KEY = "nabra-custom-presets";
@@ -292,17 +362,16 @@ export function saveCustomPresets(presets: CustomPreset[]): CustomPreset[] {
   return unique;
 }
 
-export function upsertCustomPreset(preset: CustomPreset): CustomPreset[] {
-  const presets = loadCustomPresets();
-  const index = presets.findIndex((p) => p.id === preset.id);
-  if (index >= 0) presets[index] = preset;
-  else presets.push(preset);
-  persistCustom(presets);
-  return presets;
-}
-
-export function removeCustomPreset(id: string): CustomPreset[] {
-  const presets = loadCustomPresets().filter((p) => p.id !== id);
-  persistCustom(presets);
-  return presets;
+/**
+ * Removes one preset from the list the caller owns (its React state). The old
+ * version re-read storage, so a delete could operate on a stale — or empty —
+ * stored copy whenever the previous write had failed, wiping the visible list.
+ */
+export function removeCustomPreset(
+  presets: CustomPreset[],
+  id: string,
+): CustomPreset[] {
+  const next = presets.filter((p) => p.id !== id);
+  persistCustom(next);
+  return next;
 }

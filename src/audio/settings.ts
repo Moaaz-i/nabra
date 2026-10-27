@@ -43,7 +43,38 @@ export type VoiceSettings = {
   detector: PitchMethodChoice;
   gateEnabled: boolean;
   gateThreshold: number;
+  /**
+   * Runs the Silero voice-activity model on the input. Speech is shifted,
+   * everything else -- a fan, a game, someone typing -- is passed through
+   * untouched, and the noise gate follows the model instead of loudness.
+   */
+  vadEnabled: boolean;
+  /** 0 = strict, 1 = permissive. Maps onto the model's probability axis. */
+  vadSensitivity: number;
   latencyMode: LatencyMode;
+  /** Acoustic Echo Cancellation: removes speaker playback sound leaking into mic */
+  echoCancellation: boolean;
+  /** Noise Suppression: cuts ambient fans, background hum and room noise */
+  noiseSuppression: boolean;
+  /** Real-time Neural AI Noise Suppression (RNNoise) */
+  aiDenoiser: boolean;
+  /** Neural AI Denoiser Blend (0 = dry, 1 = 100% full neural isolation) */
+  aiDenoiserMix: number;
+  /** Studio Broadcast Voice Enhancer (Broadcast warmth, clarity air, vocal de-esser) */
+  studioEnhancer: boolean;
+  /** Anti-Feedback: auto-ducks and caps runaway audio loops when monitor is active */
+  antiFeedback: boolean;
+  /** Speaker Bleed Shield: suppresses background speaker leakage during pauses */
+  speakerBleedShield: boolean;
+  /** Robot / Cyber Voice Ring Modulator */
+  robotEnabled: boolean;
+  robotMix: number;
+  robotRate: number;
+  /** Walkie-Talkie / Tactical Radio bandpass effect */
+  radioEnabled: boolean;
+  radioMix: number;
+  /** 3D Stereo Widener effect (0 = mono, 1 = max spatial width) */
+  stereoWidth: number;
 };
 
 export const defaultSettings = (): VoiceSettings => ({
@@ -79,7 +110,27 @@ export const defaultSettings = (): VoiceSettings => ({
   detector: "auto",
   gateEnabled: false,
   gateThreshold: -48,
+  // On by default because it removes work rather than adding it: without it
+  // every loud non-speech sound in the room -- a fan, a keyboard, a game in
+  // the next window -- is fed to the pitch shifter as though it were a voice
+  // and comes out as warble. Toggling it off restores the old behaviour
+  // exactly, including when the model cannot be loaded at all.
+  vadEnabled: true,
+  vadSensitivity: 0.5,
   latencyMode: "standard",
+  echoCancellation: false,
+  noiseSuppression: false,
+  aiDenoiser: false,
+  aiDenoiserMix: 1,
+  studioEnhancer: false,
+  antiFeedback: true,
+  speakerBleedShield: false,
+  robotEnabled: false,
+  robotMix: 0.8,
+  robotRate: 60,
+  radioEnabled: false,
+  radioMix: 0.85,
+  stereoWidth: 0,
 });
 
 /**
@@ -113,6 +164,12 @@ export const SETTING_RANGES = {
   delayFeedback: [0, 0.9],
   distortion: [0, 1],
   gateThreshold: [-80, -20],
+  vadSensitivity: [0, 1],
+  aiDenoiserMix: [0, 1],
+  robotMix: [0, 1],
+  robotRate: [20, 250],
+  radioMix: [0, 1],
+  stereoWidth: [0, 1],
 } as const satisfies Partial<
   Record<keyof VoiceSettings, readonly [number, number]>
 >;
@@ -132,6 +189,15 @@ export const SETTING_FLAGS = [
   "bypass",
   "agc",
   "gateEnabled",
+  "vadEnabled",
+  "echoCancellation",
+  "noiseSuppression",
+  "aiDenoiser",
+  "studioEnhancer",
+  "antiFeedback",
+  "speakerBleedShield",
+  "robotEnabled",
+  "radioEnabled",
 ] as const satisfies readonly (keyof VoiceSettings)[];
 
 export const clampSetting = (value: number, min: number, max: number) =>

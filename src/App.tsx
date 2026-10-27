@@ -16,6 +16,13 @@ import {
 } from "./audio/engine";
 import { midiToHz, midiToName, NOTE_NAMES } from "./audio/notes";
 import {
+  calibrateMic,
+  captureMic,
+  type Calibration,
+  type CapturePhase,
+} from "./audio/calibrate";
+import { isGloballySafe } from "./hotkeys";
+import {
   loadCustomPresets,
   removeCustomPreset,
   saveCustomPresets,
@@ -27,6 +34,18 @@ const STORAGE_KEY = "nabra-studio-v3";
 const PREF_KEY = "nabra-prefs-v1";
 /** Upper bound on how long stopping the engine waits for a MediaRecorder. */
 const RECORDER_STOP_TIMEOUT_MS = 1500;
+
+/**
+ * One object per recording: the recorder, its own chunk list, and the
+ * resolver `stopActiveRecorder` waits on. Sharing chunk/stop state across
+ * recordings let a late `onstop` from a torn-down recorder wipe or merge
+ * the next take's data.
+ */
+type ActiveRecording = {
+  rec: MediaRecorder;
+  chunks: Blob[];
+  resolve: () => void;
+};
 
 type Bindings = {
   toggle: string;
@@ -70,7 +89,13 @@ function loadPrefs(): Prefs {
 }
 
 function persistPrefs(prefs: Prefs) {
-  localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
+  try {
+    localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
+  } catch {
+    // Storage may be full or disabled. This runs inside a React state
+    // updater and the app has no error boundary, so a throw here would
+    // blank the whole UI -- the in-memory prefs are good enough.
+  }
 }
 
 const emptyFrame: AnalysisFrame = {
@@ -92,6 +117,12 @@ const emptyFrame: AnalysisFrame = {
   clipping: false,
   bypass: false,
   sinkFallback: false,
+  speechProb: 0,
+  speaking: false,
+  vadActive: false,
+  feedbackDetected: false,
+  denoiserActive: false,
+  studioEnhancerActive: false,
 };
 
 type Saved = {
@@ -100,7 +131,7 @@ type Saved = {
   settings?: Partial<VoiceSettings>;
 };
 
-type EngineTab = "pitch" | "tone" | "effects" | "dyn";
+type EngineTab = "pitch" | "tone" | "effects" | "dyn" | "isolation";
 
 function loadSaved(): Saved {
   try {
@@ -228,18 +259,28 @@ export default function App() {
   const [customPresets, setCustomPresets] =
     useState<CustomPreset[]>(loadCustomPresets);
   const [recording, setRecording] = useState(false);
+  const [calibrating, setCalibrating] = useState<CapturePhase | "analyzing" | null>(
+    null,
+  );
+  const [calibration, setCalibration] = useState<Calibration | null>(null);
   const [updateInfo, setUpdateInfo] = useState<{
     version: string;
     url: string;
   } | null>(null);
-  const recordingRef = useRef<MediaRecorder | null>(null);
+  const recordingRef = useRef<ActiveRecording | null>(null);
   const pttDownRef = useRef(false);
   /** Mute state to put back when a push-to-talk key is released. */
   const muteBeforePttRef = useRef<boolean | null>(null);
-  const recorderChunksRef = useRef<BlobPart[]>([]);
-  const recorderStopResolveRef = useRef<(() => void) | null>(null);
+  /** Mirrors `calibrating` for synchronous guards (toggle, tray, hotkeys). */
+  const calibratingRef = useRef(false);
+  /** Actions that failed to register globally (already taken by the OS). */
+  const [globalFailures, setGlobalFailures] = useState<
+    (keyof Bindings)[] | null
+  >(null);
   const [rebinding, setRebinding] = useState<keyof Bindings | null>(null);
   const rebindingRef = useRef(false);
+  const [testingVoice, setTestingVoice] = useState(false);
+  const [testCountdown, setTestCountdown] = useState(0);
 
   const setPrefs = useCallback((updater: (current: Prefs) => Prefs) => {
     setPrefsState((current) => {
@@ -309,9 +350,23 @@ export default function App() {
   }, [router]);
 
   useEffect(() => {
-    return window.nabra?.onUpdateAvailable(
-      (info: { version: string; url: string }) => setUpdateInfo(info),
-    );
+    const off = window.nabra?.onUpdateAvailable((info: {
+      version: string;
+      url: string;
+    }) => {
+      setUpdateInfo(info);
+      // Live push received → tell main it can count the banner as shown.
+      window.nabra?.ackUpdate();
+    });
+    // The push can land before this listener exists; the main process keeps
+    // the banner pending and hands it over to any renderer that asks.
+    void window.nabra
+      ?.getPendingUpdate()
+      .then((info) => {
+        if (info) setUpdateInfo(info);
+      })
+      .catch(() => undefined);
+    return off;
   }, []);
 
   const targetNotes = useMemo(() => {
@@ -322,10 +377,39 @@ export default function App() {
     return notes;
   }, []);
 
+  // `rec.stop()` only fires `onstop` asynchronously, and never at all if the
+  // track ends first, so the wait is bounded. Every path that tears the
+  // engine down while a recording is live must go through here, otherwise
+  // `recording` stays true with no way to clear it from the UI.
+  const stopActiveRecorder = useCallback(async () => {
+    const active = recordingRef.current;
+    if (!active || active.rec.state === "inactive") return;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        // The recorder never reported a stop; reclaim the state so the
+        // button cannot stay stuck for the rest of the session.
+        if (recordingRef.current === active) {
+          recordingRef.current = null;
+          setRecording(false);
+        }
+        resolve();
+      }, RECORDER_STOP_TIMEOUT_MS);
+      const previous = active.resolve;
+      active.resolve = () => {
+        clearTimeout(timer);
+        previous();
+        resolve();
+      };
+      active.rec.stop();
+    });
+  }, []);
+
   const loadDevices = useCallback(async (forcePrompt = false) => {
     setError("");
     try {
-      await requestAudioAccess(forcePrompt);
+      // While routing, the mic is already open; forcing a second open fails
+      // on exclusive drivers and would report a healthy route as broken.
+      await requestAudioAccess(forcePrompt && !runningRef.current);
       const listed = await listDevices();
       setInputs(listed.inputs);
       setOutputs(listed.outputs);
@@ -349,6 +433,7 @@ export default function App() {
           (d) => d.deviceId === outputIdRef.current,
         );
         if (!inOk || !outOk) {
+          await stopActiveRecorder();
           await router.stop();
           runningRef.current = false;
           setRunning(false);
@@ -360,7 +445,7 @@ export default function App() {
         "تعذّر الوصول إلى المايك. اسمح للتطبيق باستخدام الميكروفون ثم أعد المحاولة.",
       );
     }
-  }, [router]);
+  }, [router, stopActiveRecorder]);
 
   useEffect(() => {
     if (!ready) return;
@@ -378,6 +463,12 @@ export default function App() {
     // two starts (or a start straight after a stop) because the ref only
     // followed the state on the next render.
     if (busyRef.current) return;
+    // A capture is mid-flight; opening the mic again confuses exclusive
+    // drivers and would patch settings measured against a stale graph.
+    if (calibratingRef.current) {
+      setError("المعايرة جارية — انتظر انتهاؤها قليلاً.");
+      return;
+    }
     if (runningRef.current) {
       busyRef.current = true;
       setBusy(true);
@@ -385,22 +476,7 @@ export default function App() {
       setRunning(false);
       setFrame(emptyFrame);
       try {
-        const rec = recordingRef.current;
-        if (rec && rec.state !== "inactive") {
-          // `rec.stop()` only fires `onstop` asynchronously, and never at all
-          // if the track ends first, so the wait is bounded.
-          await new Promise<void>((resolve) => {
-            recorderStopResolveRef.current = resolve;
-            rec.stop();
-            setTimeout(() => {
-              if (!recorderStopResolveRef.current) return;
-              recorderStopResolveRef.current = null;
-              recordingRef.current = null;
-              setRecording(false);
-              resolve();
-            }, RECORDER_STOP_TIMEOUT_MS);
-          });
-        }
+        await stopActiveRecorder();
         await router.stop();
       } catch (err) {
         setError(
@@ -433,7 +509,7 @@ export default function App() {
       busyRef.current = false;
       setBusy(false);
     }
-  }, [router]);
+  }, [router, stopActiveRecorder]);
 
   const patch = useCallback(
     (
@@ -449,62 +525,141 @@ export default function App() {
     [],
   );
 
+  const runQuickTest = useCallback(() => {
+    if (testingVoice || !runningRef.current) return;
+    const stream = router.getOutputStream();
+    if (!stream) return;
+    setTestingVoice(true);
+    setTestCountdown(5);
+    const chunks: Blob[] = [];
+    let rec: MediaRecorder;
+    try {
+      rec = new MediaRecorder(stream);
+    } catch {
+      setTestingVoice(false);
+      return;
+    }
+    rec.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+    rec.start();
+
+    const interval = setInterval(() => {
+      setTestCountdown((c) => {
+        if (c <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return c - 1;
+      });
+    }, 1000);
+
+    setTimeout(() => {
+      rec.onstop = () => {
+        setTestingVoice(false);
+        const blob = new Blob(chunks, { type: "audio/webm" });
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        const withSink = audio as HTMLAudioElement & {
+          setSinkId?: (deviceId: string) => Promise<void>;
+        };
+        if (typeof withSink.setSinkId === "function" && outputIdRef.current) {
+          withSink.setSinkId(outputIdRef.current).catch(() => {});
+        }
+        audio.play().catch(() => {});
+        audio.onended = () => URL.revokeObjectURL(url);
+      };
+      try {
+        rec.stop();
+      } catch {
+        setTestingVoice(false);
+      }
+    }, 5000);
+  }, [router, testingVoice]);
+
+  const applyInstantClean = useCallback(() => {
+    patch({
+      echoCancellation: false,
+      noiseSuppression: false,
+      aiDenoiser: false,
+      studioEnhancer: false,
+      antiFeedback: true,
+      speakerBleedShield: false,
+      vadEnabled: true,
+      gateEnabled: false,
+      highpassHz: 80,
+      deess: 0.1,
+      compress: 0.1,
+      warmth: 0.3,
+      presence: 0.5,
+    });
+  }, [patch]);
+
   const startRecording = useCallback(() => {
     if (recordingRef.current || !runningRef.current) return;
     const stream = router.getOutputStream();
     if (!stream) return;
     let mimeType = "audio/webm;codecs=opus";
     if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = "audio/webm";
+    let rec: MediaRecorder;
     try {
-      const rec = new MediaRecorder(stream, {
+      rec = new MediaRecorder(stream, {
         mimeType,
         audioBitsPerSecond: 128000,
       });
-      recordingRef.current = rec;
-      setRecording(true);
-      rec.ondataavailable = (e) => {
-        if (e.data.size > 0) recorderChunksRef.current.push(e.data);
-      };
-      rec.onstop = () => {
-        const blob = new Blob(recorderChunksRef.current, { type: mimeType });
-        recorderChunksRef.current = [];
-        setRecording(false);
-        recordingRef.current = null;
-        recorderStopResolveRef.current?.();
-        recorderStopResolveRef.current = null;
-        if (blob.size === 0) return;
-        const reader = new FileReader();
-        reader.onload = () => {
-          const base64 = String(reader.result).split(",")[1] ?? "";
-          const stamp = new Date();
-          const pad = (n: number) => String(n).padStart(2, "0");
-          const local =
-            `${stamp.getFullYear()}-${pad(stamp.getMonth() + 1)}-${pad(stamp.getDate())}` +
-            `-${pad(stamp.getHours())}-${pad(stamp.getMinutes())}-${pad(stamp.getSeconds())}`;
-          void saveRecordingFile(`نبرة-${local}.webm`, base64);
-        };
-        reader.readAsDataURL(blob);
-      };
-      rec.start(500);
     } catch {
-      setRecording(false);
+      setError("تعذّر بدء التسجيل: صيغة غير مدعومة على هذا النظام.");
+      return;
     }
-  }, [router]);
-
-  const stopRecording = useCallback(() => {
-    const rec = recordingRef.current;
-    if (!rec) return;
-    // `stop()` throws if the recorder is already inactive (a track can end on
-    // its own), and a second click must not queue another stop.
-    if (rec.state !== "inactive") {
-      try {
-        rec.stop();
-      } catch {
+    // Everything this recording produces lives on the recording itself, so a
+    // late `onstop` from an older recorder can never touch the new take.
+    const active: ActiveRecording = { rec, chunks: [], resolve: () => undefined };
+    rec.ondataavailable = (e) => {
+      if (e.data.size > 0) active.chunks.push(e.data);
+    };
+    rec.onstop = () => {
+      const blob = new Blob(active.chunks, { type: mimeType });
+      active.chunks.length = 0;
+      if (recordingRef.current === active) {
         recordingRef.current = null;
         setRecording(false);
       }
+      active.resolve();
+      if (blob.size === 0) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = String(reader.result).split(",")[1] ?? "";
+        const stamp = new Date();
+        const pad = (n: number) => String(n).padStart(2, "0");
+        const local =
+          `${stamp.getFullYear()}-${pad(stamp.getMonth() + 1)}-${pad(stamp.getDate())}` +
+          `-${pad(stamp.getHours())}-${pad(stamp.getMinutes())}-${pad(stamp.getSeconds())}`;
+        // A lost take must be visible: a full disk or a cancelled I/O error
+        // used to vanish without a trace.
+        void saveRecordingFile(`نبرة-${local}.webm`, base64).catch(() => {
+          setError("تعذّر حفظ التسجيل — تحقق من مساحة القرص وصلاحيات المجلد.");
+        });
+      };
+      reader.onerror = () => setError("تعذّرت قراءة التسجيل للحفظ.");
+      reader.readAsDataURL(blob);
+    };
+    try {
+      rec.start(500);
+    } catch {
+      setError("تعذّر بدء التسجيل.");
+      return;
     }
-  }, []);
+    // Claim the recording only after `start()` succeeded; a failed start
+    // must not leave a stale ref blocking every future take.
+    recordingRef.current = active;
+    setRecording(true);
+  }, [router]);
+
+  const stopRecording = useCallback(() => {
+    if (!recordingRef.current) return;
+    // Same bounded stop as every other teardown path.
+    void stopActiveRecorder();
+  }, [stopActiveRecorder]);
 
   const saveCurrentPreset = useCallback(() => {
     // Unique id and unique label: `Date.now()` collides when two saves land in
@@ -543,7 +698,9 @@ export default function App() {
             Array.isArray((parsed as { presets?: unknown }).presets)
           ? ((parsed as { presets: unknown[] }).presets ?? [])
           : [];
-      const existing = loadCustomPresets();
+      // The in-memory list is the truth: a failed localStorage write earlier
+      // must not make an import merge into a stale (or empty) stored copy.
+      const existing = customPresets;
       const seen = new Set(existing.map((p) => p.id));
       const added: CustomPreset[] = [];
       incoming.forEach((entry, i) => {
@@ -578,7 +735,7 @@ export default function App() {
     } catch {
       setError("الملف المستورد غير صالح.");
     }
-  }, [setError]);
+  }, [customPresets, setError]);
 
   const toggleAlwaysOnTop = useCallback(
     (flag: boolean) => {
@@ -588,6 +745,50 @@ export default function App() {
     [setPrefs],
   );
 
+  /**
+   * The one-click path: listen to the raw mic for a few seconds, measure it,
+   * and apply a settings patch for every defect that was actually heard.
+   * Nothing here dials knobs by hand -- the report explains each change.
+   */
+  const runCalibration = useCallback(async () => {
+    if (!inputIdRef.current) {
+      setError("اختر مايك الإدخال أولاً حتى أعرف ما الذي أعايره.");
+      return;
+    }
+    // The capture opens the mic on its own; an exclusive driver would reject
+    // the second open while the router holds it.
+    if (runningRef.current) {
+      setError("أوقف التوجيه مؤقتاً قبل المعايرة لأن المايك مشغول.");
+      return;
+    }
+    setError("");
+    setCalibration(null);
+    setCalibrating("silence");
+    calibratingRef.current = true;
+    try {
+      const { samples, sampleRate } = await captureMic(
+        inputIdRef.current,
+        (phase) => setCalibrating(phase),
+      );
+      setCalibrating("analyzing");
+      // Yield one frame so the "analyzing" state actually paints before the
+      // synchronous FFT work blocks the thread.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const result = calibrateMic(samples, sampleRate, settingsRef.current);
+      setCalibration(result);
+      if (Object.keys(result.settings).length > 0) patch(result.settings);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "تعذّرت معايرة المايك. تأكد من السماح بالوصول إليه.",
+      );
+    } finally {
+      setCalibrating(null);
+      calibratingRef.current = false;
+    }
+  }, [patch]);
+
   /** Puts the mute state that was in force before PTT was held back. */
   const releasePtt = useCallback(() => {
     if (!pttDownRef.current) return;
@@ -596,8 +797,43 @@ export default function App() {
     muteBeforePttRef.current = null;
     // `null` means PTT was never engaged here, so leave mute alone.
     if (restore == null) return;
+    // Mute was toggled while the key was held (by the user or the tray);
+    // that deliberate choice outranks restoring the older state.
+    if (settingsRef.current.muted !== false) return;
     patch({ muted: restore });
   }, [patch]);
+
+  /**
+   * Runs a bound shortcut action. Shared by the in-window key listener and the
+   * system-wide (tray/OS) hotkey listener so both paths behave identically.
+   */
+  const runHotkey = useCallback(
+    (action: keyof Bindings, phase: "keydown" | "keyup") => {
+      if (action === "ptt") {
+        if (phase === "keyup") {
+          releasePtt();
+          return;
+        }
+        // A focused button would also "click" on this key, double-firing.
+        if (!pttDownRef.current) {
+          pttDownRef.current = true;
+          muteBeforePttRef.current = settingsRef.current.muted;
+          patch({ muted: false });
+        }
+        return;
+      }
+      // Non-PTT actions fire on the press; acting on keyup too would
+      // double-toggle them.
+      if (phase !== "keydown") return;
+      if (action === "toggle") void toggleRoute();
+      else if (action === "mute") {
+        patch((current: VoiceSettings) => ({ muted: !current.muted }));
+      } else if (action === "bypass") {
+        patch((current: VoiceSettings) => ({ bypass: !current.bypass }));
+      }
+    },
+    [patch, releasePtt, toggleRoute],
+  );
 
   const onKey = useCallback(
     (event: KeyboardEvent) => {
@@ -617,33 +853,25 @@ export default function App() {
       if (b.ptt && event.code === b.ptt) {
         // A focused button would also "click" on this key, double-firing.
         event.preventDefault();
-        if (fresh && !pttDownRef.current) {
-          pttDownRef.current = true;
-          muteBeforePttRef.current = settingsRef.current.muted;
-          patch({ muted: false });
-        }
+        if (fresh) runHotkey("ptt", "keydown");
         return;
       }
       if (event.code === b.toggle) {
         event.preventDefault();
-        if (fresh) void toggleRoute();
+        if (fresh) runHotkey("toggle", "keydown");
         return;
       }
       if (event.code === b.mute) {
         event.preventDefault();
-        if (fresh) {
-          patch((current: VoiceSettings) => ({ muted: !current.muted }));
-        }
+        if (fresh) runHotkey("mute", "keydown");
         return;
       }
       if (event.code === b.bypass) {
         event.preventDefault();
-        if (fresh) {
-          patch((current: VoiceSettings) => ({ bypass: !current.bypass }));
-        }
+        if (fresh) runHotkey("bypass", "keydown");
       }
     },
-    [prefs.bindings, toggleRoute, patch],
+    [prefs.bindings, runHotkey],
   );
   const onKeyUp = useCallback(
     (event: KeyboardEvent) => {
@@ -688,6 +916,72 @@ export default function App() {
       window.removeEventListener("visibilitychange", blur);
     };
   }, []);
+
+  const runHotkeyRef = useRef(runHotkey);
+  useEffect(() => {
+    runHotkeyRef.current = runHotkey;
+  }, [runHotkey]);
+
+  // System-wide shortcuts: registered with the OS only while the window is
+  // unfocused, so a game or Discord can drive PTT/toggle -- and typing inside
+  // the app never fires a hotkey. Keys without an accelerator mapping (bare
+  // modifiers such as ShiftLeft) keep working in-window as before.
+  useEffect(() => {
+    if (!window.nabra) return;
+    const sync = (): void => {
+      const focused = document.hasFocus();
+      void window.nabra
+        .setGlobalHotkeys(focused ? {} : prefs.bindings)
+        .then((done) => {
+          // An empty send while focused unregisters everything; that is not
+          // a failure report, so only the real attempt updates the list.
+          if (focused) return;
+          const attempted = (
+            Object.keys(prefs.bindings) as (keyof Bindings)[]
+          ).filter(
+            (action) =>
+              action !== "ptt" && isGloballySafe(prefs.bindings[action]),
+          );
+          setGlobalFailures(
+            attempted.filter((action) => !done.includes(action)),
+          );
+        })
+        .catch(() => undefined);
+    };
+    sync();
+    window.addEventListener("focus", sync);
+    window.addEventListener("blur", sync);
+    return () => {
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("blur", sync);
+      void window.nabra.setGlobalHotkeys({});
+    };
+  }, [prefs.bindings]);
+
+  useEffect(() => {
+    return window.nabra?.onGlobalHotkey((info) => {
+      // `globalShortcut` only reports the press; hold-style actions (PTT) are
+      // never registered globally, so a press is all that can arrive.
+      runHotkeyRef.current(info.action as keyof Bindings, "keydown");
+    });
+  }, []);
+
+  // Tray: mirror the live routing/mute state and honour its quick actions.
+  useEffect(() => {
+    void window.nabra?.setTrayState({
+      running,
+      muted: settings.muted,
+    });
+  }, [running, settings.muted]);
+
+  useEffect(() => {
+    return window.nabra?.onTrayAction((action) => {
+      if (action === "toggle") void toggleRoute();
+      else if (action === "mute") {
+        patch((current: VoiceSettings) => ({ muted: !current.muted }));
+      }
+    });
+  }, [toggleRoute, patch]);
 
   useEffect(() => {
     if (!rebinding) {
@@ -735,12 +1029,15 @@ export default function App() {
   // the sliders currently hold leaves stale effects behind (switching from
   // "جوقة" to "أصلي" used to keep the reverb), so apply on top of a clean
   // baseline. Session state and per-machine calibration stay under the user's
-  // control; everything the preset does not mention goes back to default.
+  // control even when a custom preset captured them at save time: they are
+  // re-asserted after the preset is spread, so a preset can never unmute or
+  // re-enable the gate mid-call.
   const applyPreset = useCallback(
     (presetSettings: Partial<VoiceSettings>) => {
       setSettings((current) =>
         sanitizeSettings({
           ...defaultSettings(),
+          ...presetSettings,
           outputGain: current.outputGain,
           muted: current.muted,
           monitor: current.monitor,
@@ -749,12 +1046,13 @@ export default function App() {
           micDrive: current.micDrive,
           gateEnabled: current.gateEnabled,
           gateThreshold: current.gateThreshold,
+          vadEnabled: current.vadEnabled,
+          vadSensitivity: current.vadSensitivity,
           detector: current.detector,
           latencyMode: current.latencyMode,
           targetMidi: current.targetMidi,
           scale: current.scale,
           rootPc: current.rootPc,
-          ...presetSettings,
         }),
       );
     },
@@ -823,6 +1121,16 @@ export default function App() {
               title="لم يُربط الصوت بجهاز المخرج مباشرة؛ يُستخدم إخراج النظام الافتراضي."
             >
               إخراج افتراضي
+            </span>
+          )}
+          {settings.vadEnabled && running && (
+            <span
+              className={`chip ${
+                frame.vadActive ? (frame.speaking ? "speech" : "") : "warn"
+              }`}
+              title="كشف الكلام: يحوّل النغمة عند الكلام فقط وتمرّر البقية كما هي"
+            >
+              {frame.vadActive ? (frame.speaking ? "كلام" : "صمت") : "VAD…"}
             </span>
           )}
           {settings.bypass && <span className="chip warn">تجاوز</span>}
@@ -921,6 +1229,79 @@ export default function App() {
           )}
 
           {deviceSelects}
+
+          <div className="calibrate">
+            <div className="calibrate-head">
+              <strong>معايرة تلقائية</strong>
+              <button
+                type="button"
+                className="btn primary small"
+                disabled={calibrating !== null}
+                onClick={() => void runCalibration()}
+              >
+                {calibrating === "silence"
+                  ? "اسكت الآن… أستمع للمكان"
+                  : calibrating === "speech"
+                    ? "تكلّم بشكل طبيعي…"
+                    : calibrating === "analyzing"
+                      ? "أحلّل القياسات…"
+                      : "حلّل مايكي واضبطه"}
+              </button>
+            </div>
+            {!calibrating && !calibration && (
+              <p className="calibrate-note">
+                أستمع إلى المايك بضع ثوانٍ: صمت أولاً ليقيس ضجيج الغرفة، ثم
+                كلام طبيعي. أشخّص كل عيب سمعته — طنين كهرباء، رنّة، هيس، صولجان،
+                ضعف حضور، تذبذب مستوى — وأضبط الإعدادات بنفسي، مع شرح كل تغيير.
+              </p>
+            )}
+            {calibrating && (
+              <div className="calibrate-progress" aria-live="polite">
+                <i className={calibrating === "silence" ? "run" : ""} />
+                <span>
+                  {calibrating === "silence"
+                    ? "مرحلة ١ من ٢: أقيس ضجيج المكان — لا تتكلم ولا تتحرك قرب المايك."
+                    : calibrating === "speech"
+                      ? "مرحلة ٢ من ٢: تكلم بشكل طبيعي — جملة أو جملتان تكفيان."
+                      : "أحلّل القياسات… لحظات."}
+                </span>
+              </div>
+            )}
+            {calibration && (
+              <div className="calibrate-report">
+                <strong>
+                  {calibration.findings.some((f) => f.severity === "bad")
+                    ? "وجدت مشاكل وأصلحتها:"
+                    : calibration.findings.some((f) => f.severity === "warn")
+                      ? "وجدت ملاحظات وأخذت بها:"
+                      : "المايك سليم:"}
+                </strong>
+                <ul>
+                  {calibration.findings.map((finding, i) => (
+                    <li key={i} className={finding.severity}>
+                      {finding.message}
+                    </li>
+                  ))}
+                </ul>
+                <div className="calibrate-actions">
+                  <button
+                    type="button"
+                    className="btn ghost small"
+                    onClick={() => setCalibration(null)}
+                  >
+                    إخفاء
+                  </button>
+                  <button
+                    type="button"
+                    className="btn ghost small"
+                    onClick={() => void runCalibration()}
+                  >
+                    أعد المعايرة
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
 
           <div className={`hint ${hasVirtualOut ? "ok" : ""}`}>
             <strong>{hasVirtualOut ? "تم رصد مايك وهمي" : hint.title}</strong>
@@ -1077,7 +1458,9 @@ export default function App() {
                   className="preset-del"
                   title="حذف المسبق"
                   onClick={() =>
-                    setCustomPresets(removeCustomPreset(preset.id))
+                    setCustomPresets(
+                      removeCustomPreset(customPresets, preset.id),
+                    )
                   }
                 >
                   ×
@@ -1137,6 +1520,13 @@ export default function App() {
               onClick={() => setTab("dyn")}
             >
               ديناميك
+            </button>
+            <button
+              type="button"
+              className={tab === "isolation" ? "on" : ""}
+              onClick={() => setTab("isolation")}
+            >
+              عزل ونقاء 🛡️
             </button>
           </div>
 
@@ -1332,6 +1722,59 @@ export default function App() {
                 format={(v) => `${Math.round(v * 100)}٪`}
                 onChange={(deess) => patch({ deess })}
               />
+              <div className="char-fx-card">
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={settings.robotEnabled}
+                    onChange={(e) => patch({ robotEnabled: e.target.checked })}
+                  />
+                  🤖 صوت الروبوت السايبورغ (Ring Modulator)
+                </label>
+                {settings.robotEnabled && (
+                  <>
+                    <Slider
+                      label="قوة التأثير الآلي"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={settings.robotMix}
+                      format={(v) => `${Math.round(v * 100)}٪`}
+                      onChange={(robotMix) => patch({ robotMix })}
+                    />
+                    <Slider
+                      label="تردد الرنين الآلي"
+                      min={20}
+                      max={200}
+                      step={1}
+                      value={settings.robotRate}
+                      format={(v) => `${v.toFixed(0)} Hz`}
+                      onChange={(robotRate) => patch({ robotRate })}
+                    />
+                  </>
+                )}
+              </div>
+              <div className="char-fx-card">
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={settings.radioEnabled}
+                    onChange={(e) => patch({ radioEnabled: e.target.checked })}
+                  />
+                  📻 نغمة اللاسلكي وراديو الاتصالات الحربية
+                </label>
+                {settings.radioEnabled && (
+                  <Slider
+                    label="قوة نغمة اللاسلكي"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={settings.radioMix}
+                    format={(v) => `${Math.round(v * 100)}٪`}
+                    onChange={(radioMix) => patch({ radioMix })}
+                  />
+                )}
+              </div>
             </>
           )}
 
@@ -1440,6 +1883,18 @@ export default function App() {
                   onChange={(distortion) => patch({ distortion })}
                 />
               </div>
+              <div className="fx-section">
+                <h3>مجال استريو ثلاثي الأبعاد</h3>
+                <Slider
+                  label="عرض الاستريو 3D"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={settings.stereoWidth}
+                  format={(v) => (v === 0 ? "أحادي (مونو)" : `${Math.round(v * 100)}٪ محيطي`)}
+                  onChange={(stereoWidth) => patch({ stereoWidth })}
+                />
+              </div>
             </>
           )}
 
@@ -1466,12 +1921,53 @@ export default function App() {
                 <Slider
                   label="حدّ البوابة"
                   min={-80}
-                  max={-30}
+                  max={-20}
                   step={1}
                   value={settings.gateThreshold}
                   format={(v) => `${v.toFixed(0)} dB`}
                   onChange={(gateThreshold) => patch({ gateThreshold })}
                 />
+              )}
+              <label className="check">
+                <input
+                  type="checkbox"
+                  checked={settings.vadEnabled}
+                  onChange={(e) => patch({ vadEnabled: e.target.checked })}
+                />
+                ذكاء الكلام — لا يحوّل النغمة إلا عند الكلام
+              </label>
+              {settings.vadEnabled && (
+                <>
+                  <Slider
+                    label="حساسية كشف الكلام"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={settings.vadSensitivity}
+                    format={(v) => `${Math.round(v * 100)}٪`}
+                    onChange={(vadSensitivity) => patch({ vadSensitivity })}
+                  />
+                  {!running ? (
+                    <p className="vad-status">
+                      <span className="dot" />
+                      يعمل أثناء التوجيه
+                    </p>
+                  ) : frame.vadActive ? (
+                    <p
+                      className={`vad-status ${frame.speaking ? "on" : ""}`}
+                      title="نسبة ثقة النموذج في أن ما يصل إليه كلام"
+                    >
+                      <span className="dot" />
+                      {frame.speaking ? "كلام" : "صمت"} —{" "}
+                      {Math.round(frame.speechProb * 100)}٪ ثقة
+                    </p>
+                  ) : (
+                    <p className="vad-status loading">
+                      <span className="dot" />
+                      جارٍ تحميل نموذج الكلام…
+                    </p>
+                  )}
+                </>
               )}
               <Slider
                 label="مضخّم المايك"
@@ -1499,6 +1995,153 @@ export default function App() {
                 />
                 تتبع مستوى تلقائي (AGC)
               </label>
+            </>
+          )}
+
+          {tab === "isolation" && (
+            <>
+              {frame.feedbackDetected && (
+                <div className="feedback-alert">
+                  ⚠️ <b>درع الحماية نشط:</b> تم كبح صفير الفيدباك وحماية السماعات تلقائياً لمنع الرنين!
+                </div>
+              )}
+
+              <div className="quick-actions-bar">
+                <button
+                  type="button"
+                  className="btn clean-btn"
+                  onClick={applyInstantClean}
+                  title="تفعيل الإعدادات المثالية لنقاء الصوت وعزل السماعات والضوضاء فوراً"
+                >
+                  ⚡ تنظيف فوري وشامل للمايك
+                </button>
+                <button
+                  type="button"
+                  className={`btn test-btn ${testingVoice ? "recording" : ""}`}
+                  onClick={runQuickTest}
+                  disabled={!running || testingVoice}
+                  title="تسجيل 5 ثوانٍ وإعادة تشغيلها فوراً لسماع صوتك دون مخاطرة بصفير السماعات"
+                >
+                  {testingVoice ? `🔴 جارٍ التسجيل (${testCountdown}ث)…` : "🎙️ اختبر صوتك (5 ثوانٍ)"}
+                </button>
+              </div>
+
+              <div className="iso-card" style={{ borderColor: settings.aiDenoiser ? "rgba(62, 207, 192, 0.35)" : undefined, background: settings.aiDenoiser ? "rgba(62, 207, 192, 0.04)" : undefined }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={settings.aiDenoiser}
+                      onChange={(e) => patch({ aiDenoiser: e.target.checked })}
+                    />
+                    <b>عازل الضوضاء بالذكاء الاصطناعي (RNNoise AI)</b>
+                  </label>
+                  {frame.denoiserActive && (
+                    <span className="ai-badge">⚡ ذكاء اصطناعي نشط</span>
+                  )}
+                </div>
+                <p className="iso-hint">
+                  يعزل فورياً عبر شبكة عصبية عميقة (RNN) صوت المراوح، الكيبورد، صدى الغرفة، وأصوات الخلفية المزعجة مع الحفاظ على نقاء ورنين صوتك الطبيعي دون استهلاك المعالج.
+                </p>
+                {settings.aiDenoiser && (
+                  <div style={{ marginTop: 8, paddingRight: 24 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11.5px", color: "var(--muted)", marginBottom: 4 }}>
+                      <span>نسبة العزل والامتصاص العصبي</span>
+                      <span>{Math.round(settings.aiDenoiserMix * 100)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={settings.aiDenoiserMix}
+                      onChange={(e) => patch({ aiDenoiserMix: parseFloat(e.target.value) })}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="iso-card" style={{ borderColor: settings.studioEnhancer ? "rgba(124, 77, 255, 0.35)" : undefined, background: settings.studioEnhancer ? "rgba(124, 77, 255, 0.04)" : undefined }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={settings.studioEnhancer}
+                      onChange={(e) => patch({ studioEnhancer: e.target.checked })}
+                    />
+                    <b>مُحسِّن صفاء ونبرة الاستوديو (Broadcast Tone)</b>
+                  </label>
+                  {settings.studioEnhancer && (
+                    <span className="ai-badge" style={{ background: "rgba(124, 77, 255, 0.15)", color: "#b388ff", borderColor: "rgba(124, 77, 255, 0.35)" }}>🎙️ استوديو احترافي</span>
+                  )}
+                </div>
+                <p className="iso-hint">
+                  يضبط تلقائياً منحنى الاستوديو الإذاعي: دفء صوتي عميق (Proximity Warmth)، وضوح حاد لمخارج الحروف (Air & Presence)، وترويض صفير حرف السين (De-Esser).
+                </p>
+              </div>
+
+              <div className="iso-card">
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={settings.echoCancellation}
+                    onChange={(e) => patch({ echoCancellation: e.target.checked })}
+                  />
+                  <b>إلغاء صدى السماعة (AEC)</b>
+                </label>
+                <p className="iso-hint">
+                  يمنع وصول صوت السماعات، الألعاب والموسيقى إلى المايك تلقائياً عبر عزل الهاردوير المتقدم.
+                </p>
+              </div>
+
+              <div className="iso-card">
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={settings.noiseSuppression}
+                    onChange={(e) => patch({ noiseSuppression: e.target.checked })}
+                  />
+                  <b>كابت الضوضاء والتشويش المحيط</b>
+                </label>
+                <p className="iso-hint">
+                  يزيل أصوات المراوح، مكيف الهواء، والنقر على الكيبورد وصوت الغرفة الخلفي.
+                </p>
+              </div>
+
+              <div className="iso-card">
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={settings.speakerBleedShield}
+                    onChange={(e) => patch({ speakerBleedShield: e.target.checked })}
+                  />
+                  <b>درع منع تسرب السماعات الذكي</b>
+                </label>
+                <p className="iso-hint">
+                  يكتم تلقائياً أي تسرب أو صوت صادر من السماعات أثناء فترات الصمت بين جملك.
+                </p>
+              </div>
+
+              <div className="iso-card">
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={settings.antiFeedback}
+                    onChange={(e) => patch({ antiFeedback: e.target.checked })}
+                  />
+                  <b>حامي الفيدباك والصفير التلقائي</b>
+                </label>
+                <p className="iso-hint">
+                  يكبح الرنين والصفير الحاد تلقائياً ويحمي أذنيك وسماعاتك عند تفعيل المراقبة مع السبيكر.
+                </p>
+              </div>
+
+              <div className="iso-status-pill">
+                <span className="dot on" />
+                {settings.echoCancellation && settings.speakerBleedShield
+                  ? "عزل تسرب صدى السماعات نشط ويعمل بنسبة 100٪"
+                  : "العزل مفعل جزئياً — يفضل تشغيل كافة الخيارات"}
+              </div>
             </>
           )}
 
@@ -1539,12 +2182,20 @@ export default function App() {
                   {rebinding === key
                     ? "اضغط مفتاح…"
                     : keyLabel(prefs.bindings[key])}
+                  {key === "ptt" || !isGloballySafe(prefs.bindings[key])
+                    ? " · داخل التطبيق فقط"
+                    : globalFailures?.includes(key)
+                      ? " · محجوز بمفتاح آخر"
+                      : ""}
                 </b>
               </button>
             ))}
             <p className="keys-hint">
-              اضغط المفتاح الذي تريده للمسبق المحدد. مفتاح «ضغط لتتحدث» يُسمع
-              أثناء الضغط ويُكتم عند الرفع.
+              اضغط المفتاح الذي تريده للمسبق المحدد. مفاتيح F1–F24 وحدها تعمل
+              عالمياً حتى خارج نافذة نبرة (داخل الألعاب وديسكورد) — لم أتعمّد
+              تسجيل الحروف أو المسافة عالمياً لأن ذلك يعطّل الكتابة في كل
+              التطبيقات الأخرى. بقية المفاتيح، ومنها «ضغط لتتحدث»، تعمل داخل
+              التطبيق فقط، لأن النظام لا يبلغ برفع المفتاح عالمياً.
             </p>
           </div>
           <button
@@ -1561,7 +2212,9 @@ export default function App() {
         <button
           className={`btn huge ${running ? "stop" : "primary"}`}
           type="button"
-          disabled={busy || (!running && (!inputId || !outputId))}
+          disabled={
+            busy || calibrating !== null || (!running && (!inputId || !outputId))
+          }
           onClick={() => void toggleRoute()}
         >
           {busy ? "..." : running ? "إيقاف التوجيه" : "ابدأ التوجيه"}

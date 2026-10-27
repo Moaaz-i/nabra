@@ -7,7 +7,9 @@
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
+    "predev": "node scripts/prepare-vad.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/prepare-vad.mjs",
     "build": "tsc -b && vite build",
     "dist": "npm run build && electron-builder --publish never",
     "dist:win": "npm run build && electron-builder --win --x64 --publish never",
@@ -18,11 +20,15 @@
     "dist:mac:all": "npm run build && electron-builder --mac --arm64 --x64 --publish never",
     "dist:linux": "npm run build && electron-builder --linux --x64 --publish never",
     "lint": "oxlint",
-    "test": "node scripts/pv-test.cjs && node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/ts-hooks.mjs scripts/dsp-test.mjs"
+    "test:voice": "node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/ts-hooks.mjs scripts/human-voice-test.mjs",
+    "test": "node scripts/pv-test.cjs && node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/ts-hooks.mjs scripts/dsp-test.mjs && node --experimental-strip-types --disable-warning=ExperimentalWarning --import ./scripts/ts-hooks.mjs scripts/vad-test.mjs && npm run test:voice"
   },
   "dependencies": {
+    "@sapphi-red/web-noise-suppressor": "^0.4.1",
+    "onnxruntime-web": "^1.21.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "tone": "^15.1.22"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

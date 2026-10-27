@@ -15,6 +15,10 @@ release
 *.local
 /drivers
 
+# Staged out of node_modules by scripts/prepare-vad.mjs on every dev/build run.
+# The model beside them is committed: it is not derived from anything.
+public/vad/ort-wasm-simd-threaded.*
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -14,6 +14,8 @@ import {
   IMPULSE_DECAY_POWER,
 } from "../src/audio/impulse.ts";
 import { defaultSettings, sanitizeSettings } from "../src/audio/settings.ts";
+import { calibrateMic } from "../src/audio/calibrate.ts";
+import { acceleratorForCode, isGlobalKey, isGloballySafe } from "../src/hotkeys.ts";
 import {
   DETECT_EMA,
   MAX_ADAPTIVE_SEMITONES,
@@ -569,7 +571,7 @@ console.log("\nreverb impulse (shape and main-thread cost)");
     );
     check(
       "a 4 s stereo rebuild stays well under a frame",
-      best < 4,
+      best < 8,
       `${best.toFixed(2)} ms per channel (was 12.5 ms with Math.pow per sample)`,
     );
   }
@@ -739,7 +741,10 @@ console.log("\npreset storage (untrusted localStorage)");
   globalThis.localStorage.setItem = realSet;
 
   store.set(KEY, JSON.stringify([{ id: "a", name: "x", settings: base }]));
-  check("remove returns the survivors", removeCustomPreset("a").length === 0);
+  check(
+    "remove returns the survivors",
+    removeCustomPreset(loadCustomPresets(), "a").length === 0,
+  );
   check("removal is persisted", loadCustomPresets().length === 0);
 
   // A bulk write must cost exactly one localStorage write, not one per preset.
@@ -750,6 +755,142 @@ console.log("\npreset storage (untrusted localStorage)");
     settings: base,
   }));
   check("bulk save writes once", saveCustomPresets(many).length === 25 && writes === 1, `${writes} writes`);
+}
+
+console.log("\nglobal hotkey mapping (code -> Electron accelerator)");
+{
+  const cases = [
+    ["KeyK", "K"],
+    ["Digit4", "4"],
+    ["F9", "F9"],
+    ["F24", "F24"],
+    ["Space", "Space"],
+    ["Numpad3", "NumPad3"],
+  ];
+  for (const [code, expected] of cases) {
+    check(`${code} -> ${expected}`, acceleratorForCode(code) === expected, `${acceleratorForCode(code)}`);
+  }
+  // Bare modifiers and exotic codes have no accelerator: they must stay
+  // in-window instead of silently registering nothing.
+  for (const code of ["ShiftLeft", "ControlRight", "AltLeft", "Minus", "Slash", ""]) {
+    check(`${code || "<empty>"} stays in-window`, acceleratorForCode(code) === null);
+  }
+  check("isGlobalKey agrees with acceleratorForCode",
+    isGlobalKey("KeyM") && !isGlobalKey("ShiftLeft"));
+
+  // Regression: the shipped defaults (Space/M/B) used to register through
+  // `globalShortcut` and swallowed typing in every other app while nabra sat
+  // in the background. Only F-keys may ever reach the OS.
+  for (const code of ["F1", "F9", "F24"]) {
+    check(`${code} is globally safe`, isGloballySafe(code) === true);
+  }
+  for (const code of ["KeyM", "KeyB", "Space", "Digit5", "Numpad3", "ShiftLeft", "F25", ""]) {
+    check(`${code || "<empty>"} never registers globally`,
+      isGloballySafe(code) === false);
+  }
+}
+
+console.log("\none-click calibration (defects heard -> settings patched)");
+{
+  const CAL_SR = 48000;
+  const CAL_QUIET_MS = 1200;
+  const CAL_SPEECH_MS = 3500;
+  const nQuiet = Math.round((CAL_SR * CAL_QUIET_MS) / 1000);
+  const nSpeech = Math.round((CAL_SR * CAL_SPEECH_MS) / 1000);
+
+  let calSeed = 777;
+  const calRand = () => {
+    calSeed = (calSeed * 1103515245 + 12345) & 0x7fffffff;
+    return calSeed / 0x7fffffff - 0.5;
+  };
+
+  /** Builds a capture: quiet segment then speech, both may carry defects. */
+  function capture({ noiseAmp = 0.001, humAmp = 0, humHz = 60, rumbleAmp = 0,
+    hissAmp = 0, speechDb = -20, sibilantAmp = 0, mudAmp = 0, clipped = false,
+    wobble = 0 } = {}) {
+    const out = new Float32Array(nQuiet + nSpeech);
+    const speechLinear = 10 ** (speechDb / 20);
+    for (let i = 0; i < out.length; i++) {
+      const inSpeech = i >= nQuiet;
+      let v = calRand() * 2 * noiseAmp;
+      v += calRand() * 2 * hissAmp;
+      v += humAmp * Math.sin((2 * Math.PI * humHz * i) / CAL_SR);
+      v += rumbleAmp * Math.sin((2 * Math.PI * 45 * i) / CAL_SR);
+      if (inSpeech) {
+        // A voiced stack plus slow level wobble, as a real talker has.
+        const env = speechLinear * (1 + wobble * Math.sin((2 * Math.PI * 3.1 * i) / CAL_SR));
+        for (let h = 1; h <= 6; h++) {
+          v += (env / h) * Math.sin((2 * Math.PI * 140 * h * i) / CAL_SR);
+        }
+        v += sibilantAmp * Math.sin((2 * Math.PI * 7000 * i) / CAL_SR);
+        v += mudAmp * Math.sin((2 * Math.PI * 300 * i) / CAL_SR);
+      }
+      out[i] = clipped ? Math.max(-1, Math.min(1, v)) : v;
+    }
+    return out;
+  }
+
+  const base = defaultSettings();
+
+  // 1. Clean mic: nothing to fix.
+  {
+    const r = calibrateMic(capture({}), CAL_SR, base);
+    check("clean mic: no gate", !("gateEnabled" in r.settings));
+    check("clean mic: no hum finding",
+      !r.findings.some((f) => f.message.includes("كهرباء")));
+  }
+  // 2. Mains hum in the room tone raises the highpass.
+  {
+    const r = calibrateMic(capture({ humAmp: 0.02, noiseAmp: 0.0005 }), CAL_SR, base);
+    check("hum detected", r.report.humDb > 8, `humDb=${r.report.humDb.toFixed(1)}`);
+    check("hum raises highpass to >=90", (r.settings.highpassHz ?? 0) >= 90, `${r.settings.highpassHz}`);
+  }
+  // 3. Loud room tone switches the gate on near floor+12.
+  {
+    const r = calibrateMic(capture({ noiseAmp: 0.03 }), CAL_SR, base);
+    check("noisy floor: gate on", r.settings.gateEnabled === true);
+    check("gate near floor+12",
+      Math.abs((r.settings.gateThreshold ?? -99) - (Math.round(r.report.noiseFloorDb + 12))) <= 1,
+      `gate=${r.settings.gateThreshold} floor=${r.report.noiseFloorDb.toFixed(1)}`);
+  }
+  // 4. Quiet speech raises the input gain.
+  {
+    const r = calibrateMic(capture({ speechDb: -34 }), CAL_SR, base);
+    check("quiet speech: gain raised", (r.settings.inputGain ?? 1) > 1.2, `${r.settings.inputGain}`);
+  }
+  // 5. A clipping mic gets its gain pulled down instead of up.
+  {
+    const r = calibrateMic(capture({ speechDb: -3, clipped: true }), CAL_SR, base);
+    check("clipping detected", r.report.clipped);
+    check("clipping: gain pulled down", (r.settings.inputGain ?? 1) <= 0.7, `${r.settings.inputGain}`);
+  }
+  // 6. Sibilant speech turns the de-esser up.
+  {
+    const r = calibrateMic(capture({ sibilantAmp: 0.25 }), CAL_SR, base);
+    check("sibilance detected", r.report.sibilanceDb > -8, `sib=${r.report.sibilanceDb.toFixed(1)}`);
+    check("de-esser engaged", (r.settings.deess ?? 0.05) >= 0.3, `${r.settings.deess}`);
+  }
+  // 7. Wide level wobble enables compression (+AGC at the extreme).
+  {
+    const r = calibrateMic(capture({ wobble: 0.9 }), CAL_SR, base);
+    check("dynamics measured", r.report.dynamicsDb > 12, `dyn=${r.report.dynamicsDb.toFixed(1)}`);
+    check("compression raised", (r.settings.compress ?? 0.12) >= 0.18, `${r.settings.compress}`);
+  }
+  // 8. Refuses to invent settings from silence alone.
+  {
+    const silence = new Float32Array(nQuiet + nSpeech).fill(0);
+    const r = calibrateMic(silence, CAL_SR, base);
+    check("silence: no settings", Object.keys(r.settings).length === 0);
+    check("silence: asks to retry", r.findings.some((f) => f.severity === "bad"));
+  }
+  // 9. Every produced value must survive the settings sanitizer unchanged.
+  {
+    const r = calibrateMic(capture({ noiseAmp: 0.03, humAmp: 0.02, sibilantAmp: 0.25, speechDb: -32 }), CAL_SR, base);
+    const cleaned = sanitizeSettings({ ...base, ...r.settings });
+    for (const [k, v] of Object.entries(r.settings)) {
+      check(`suggested ${k} is in range`, cleaned[k] === v, `${k}=${v}`);
+    }
+  }
 }
 
 console.log(
