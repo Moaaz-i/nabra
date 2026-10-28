@@ -93,28 +93,43 @@ function fft(re, im, inverse) {
 }
 
 class FastFifo {
-  constructor() {
-    this.buf = []
-    this.start = 0
+  constructor(capacity = 65536) {
+    this.capacity = capacity
+    this.mask = capacity - 1
+    this.buf = new Float32Array(capacity)
+    this.head = 0
+    this.tail = 0
+    this.count = 0
   }
   get length() {
-    return this.buf.length - this.start
+    return this.count
   }
   pushSample(x) {
-    this.buf.push(x)
+    if (this.count >= this.capacity) {
+      this.tail = (this.tail + 1) & this.mask
+      this.count--
+    }
+    this.buf[this.head] = x
+    this.head = (this.head + 1) & this.mask
+    this.count++
   }
   pushSamples(xs) {
-    for (let i = 0; i < xs.length; i++) this.buf.push(xs[i])
+    const len = xs.length
+    for (let i = 0; i < len; i++) this.pushSample(xs[i])
   }
-  read(i) {
-    return this.buf[this.start + i]
+  read(offset) {
+    if (offset >= this.count) return 0
+    return this.buf[(this.tail + offset) & this.mask]
   }
   remove(n) {
-    this.start += n
-    if (this.start > 65536) {
-      this.buf = this.buf.slice(this.start)
-      this.start = 0
-    }
+    const drop = n < this.count ? n : this.count
+    this.tail = (this.tail + drop) & this.mask
+    this.count -= drop
+  }
+  clear() {
+    this.head = 0
+    this.tail = 0
+    this.count = 0
   }
 }
 
@@ -139,8 +154,8 @@ class PhaseVocoder {
 
     this.input = new FastFifo()
     this.outFifo = new FastFifo()
-    this.acc = []
-    this.wsum = []
+    this.acc = new Float32Array(32768)
+    this.wsum = new Float32Array(32768)
     this.offset = 0
     this.lastEmit = 0
     this.readPos = 0
@@ -157,11 +172,14 @@ class PhaseVocoder {
   }
 
   clear() {
-    this.acc.length = 0
-    this.wsum.length = 0
+    this.input.clear()
+    this.outFifo.clear()
+    this.acc.fill(0)
+    this.wsum.fill(0)
     this.offset = 0
     this.lastEmit = 0
     this.readPos = 0
+    this.initialized = false
   }
 
   // Resample the stretched stream by `step` (step === alpha restores duration
@@ -175,15 +193,10 @@ class PhaseVocoder {
     this.readPos += step
     if (this.readPos >= 32) {
       const drop = Math.floor(this.readPos) - 2
-      this.outFifo.remove(drop)
-      this.readPos -= drop
-    }
-    if (this.acc.length > 65536) {
-      const cut = this.acc.length - 32768
-      this.acc.splice(0, cut)
-      this.wsum.splice(0, cut)
-      this.offset -= cut
-      this.lastEmit -= cut
+      if (drop > 0) {
+        this.outFifo.remove(drop)
+        this.readPos -= drop
+      }
     }
     return v0 + (v1 - v0) * frac
   }
@@ -237,11 +250,17 @@ class PhaseVocoder {
       fft(this.re, this.im, true)
 
       // Weighted overlap-add (WOLA) with running denominator for exact COLA.
-      const offset = this.offset
-      while (this.acc.length < offset + n) {
-        this.acc.push(0)
-        this.wsum.push(0)
+      if (this.lastEmit >= 8192) {
+        const shift = this.lastEmit
+        const tail = this.offset + n - shift
+        this.acc.copyWithin(0, shift, this.offset + n)
+        this.acc.fill(0, Math.max(0, tail), this.offset + n)
+        this.wsum.copyWithin(0, shift, this.offset + n)
+        this.wsum.fill(0, Math.max(0, tail), this.offset + n)
+        this.offset -= shift
+        this.lastEmit = 0
       }
+      const offset = this.offset
       const w = this.window
       for (let i = 0; i < n; i++) {
         this.acc[offset + i] += this.re[i] * w[i]

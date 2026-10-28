@@ -159,12 +159,12 @@ export class Jungle {
 
   setPitchOffset(octaves: number) {
     const up = octaves > 0
-    this.mod1Gain.gain.value = up ? 0 : 1
-    this.mod2Gain.gain.value = up ? 0 : 1
-    this.mod3Gain.gain.value = up ? 1 : 0
-    this.mod4Gain.gain.value = up ? 1 : 0
-    const amount = Math.min(Math.abs(octaves), 1.5)
     const now = this.context.currentTime
+    this.mod1Gain.gain.setTargetAtTime(up ? 0 : 1, now, 0.015)
+    this.mod2Gain.gain.setTargetAtTime(up ? 0 : 1, now, 0.015)
+    this.mod3Gain.gain.setTargetAtTime(up ? 1 : 0, now, 0.015)
+    this.mod4Gain.gain.setTargetAtTime(up ? 1 : 0, now, 0.015)
+    const amount = Math.min(Math.abs(octaves), 1.5)
     this.modGain1.gain.setTargetAtTime(this.delayTime * amount, now, 0.015)
     this.modGain2.gain.setTargetAtTime(this.delayTime * amount, now, 0.015)
   }

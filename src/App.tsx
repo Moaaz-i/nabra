@@ -1572,29 +1572,53 @@ export default function App() {
                 </select>
               </label>
               <label>
-                زمن استجابة التبديل
+                محرِّك معالجة طبقة الصوت
                 <select
-                  value={settings.latencyMode}
+                  value={settings.pitchEngine}
                   onChange={(e) =>
                     patch({
-                      latencyMode: e.target
-                        .value as VoiceSettings["latencyMode"],
+                      pitchEngine: e.target.value as VoiceSettings["pitchEngine"],
                     })
                   }
                 >
-                  <option value="standard">
-                    قياسي — جودة أعلى (محرِّك طوري)
+                  <option value="vocoder">
+                    ✨ محرِّك طوري فائق النقاء (Phase Vocoder — موصى به)
                   </option>
-                  <option value="low">منخفض — استجابة أسرع</option>
+                  <option value="jungle">
+                    ⚡ محرِّك حبيبي خفيف جداً (Jungle — للأجهزة القديمة وويندوز 7)
+                  </option>
                 </select>
               </label>
-              {running && router.latencyModePending && (
+
+              {settings.pitchEngine === "vocoder" && (
+                <label>
+                  دقة نافذة التحليل وزمن الاستجابة (FFT)
+                  <select
+                    value={settings.latencyMode}
+                    onChange={(e) =>
+                      patch({
+                        latencyMode: e.target.value as VoiceSettings["latencyMode"],
+                      })
+                    }
+                  >
+                    <option value="fast">
+                      🚀 فائق السرعة والخفة (1024 FFT — استهلاك معالج معدوم للأجهزة القديمة)
+                    </option>
+                    <option value="low">
+                      ⚡ متوازن وسلس (2048 FFT — مثالي لويندوز وماك بدون أي تعليق)
+                    </option>
+                    <option value="standard">
+                      💎 دقة استوديو قصوى (4096 FFT — للأجهزة الحديثة والقوية)
+                    </option>
+                  </select>
+                </label>
+              )}
+
+              {running && (router.latencyModePending || router.pitchEnginePending) && (
                 <div className="hint">
-                  <strong>زمن الاستجابة لن يتغيّر أثناء التشغيل</strong>
+                  <strong>تغيير المحرِّك أو دقة النافذة يتطلب إعادة بدء التوجيه</strong>
                   <span>
-                    نافذة المحرِّك الطوري تُبنى عند بدء التوجيه فقط. أوقف التوجيه
-                    وابدأه ليُطبَّق وضع{" "}
-                    {settings.latencyMode === "low" ? " «منخفض»." : " «قياسي»."}
+                    يتم بناء ذاكرة المعالجة اللحظية عند بدء التوجيه. أوقف التوجيه وابدأه مرة أخرى ليُطبَّق الإعداد الجديد فوراً.
                   </span>
                 </div>
               )}

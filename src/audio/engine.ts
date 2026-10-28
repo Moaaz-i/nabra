@@ -32,6 +32,7 @@ import {
   StudioBoothIsolator,
 } from "./studioProcessors";
 
+const PV_FAST = { fftSize: 1024, hop: 128 };
 const PV_LOW = { fftSize: 2048, hop: 256 };
 const PV_STANDARD = { fftSize: 4096, hop: 512 };
 
@@ -40,6 +41,7 @@ const dbToGain = (db: number) => 10 ** (db / 20);
 export { defaultSettings, sanitizeSettings } from "./settings";
 export type {
   LatencyMode,
+  PitchEngineChoice,
   VoiceMode,
   VoiceScale,
   VoiceSettings,
@@ -242,6 +244,7 @@ export class VoiceRouter {
   private wetActive = false;
   private wetPrimedAt: number | null = null;
   private latencyMode: VoiceSettings["latencyMode"] | null = null;
+  private pitchEngine: VoiceSettings["pitchEngine"] | null = null;
 
   // --- Voice activity detection --------------------------------------------
   private vadSession: VadSession | null = null;
@@ -271,6 +274,14 @@ export class VoiceRouter {
   /** True when the selected latency mode is not the one currently running. */
   get latencyModePending(): boolean {
     return this.running && this.latencyMode !== this.settings.latencyMode;
+  }
+
+  get activePitchEngine(): VoiceSettings["pitchEngine"] | null {
+    return this.running ? this.pitchEngine : null;
+  }
+
+  get pitchEnginePending(): boolean {
+    return this.running && this.pitchEngine !== this.settings.pitchEngine;
   }
 
   getAnalyser() {
@@ -316,32 +327,38 @@ export class VoiceRouter {
       this.ctx = ctx;
       if (ctx.state === "suspended") await ctx.resume();
 
-      const pvCfg = this.settings.latencyMode === "low" ? PV_LOW : PV_STANDARD;
+      const pvCfg =
+        this.settings.latencyMode === "fast"
+          ? PV_FAST
+          : this.settings.latencyMode === "standard"
+          ? PV_STANDARD
+          : PV_LOW;
       // The window/hop pair is fixed when the worklet node is built, so the
       // running configuration is recorded here and the UI compares against it.
       this.latencyMode = this.settings.latencyMode;
+      this.pitchEngine = this.settings.pitchEngine;
       let pitchWorklet: AudioWorkletNode | null = null;
-      try {
-        const blobUrl = URL.createObjectURL(
-          new Blob([pitchWorkletSource], { type: "application/javascript" }),
-        );
-        await ctx.audioWorklet
-          .addModule(blobUrl)
-          .finally(() => URL.revokeObjectURL(blobUrl));
-        pitchWorklet = new AudioWorkletNode(ctx, "nabra-pitch-shift", {
-          numberOfInputs: 1,
-          numberOfOutputs: 1,
-          // A microphone is mono. Up-mixing to two channels before the vocoder
-          // meant two phase vocoders running on bit-identical data: twice the
-          // FFT cost, no difference in what came out. The worklet takes the one
-          // channel and the rest of the chain is mono anyway.
-          channelCount: 1,
-          channelCountMode: "explicit",
-          outputChannelCount: [1],
-          processorOptions: { fftSize: pvCfg.fftSize, hop: pvCfg.hop },
-        });
-      } catch {
-        pitchWorklet = null;
+      if (this.settings.pitchEngine === "vocoder") {
+        try {
+          const blobUrl = URL.createObjectURL(
+            new Blob([pitchWorkletSource], { type: "application/javascript" }),
+          );
+          try {
+            await ctx.audioWorklet.addModule(blobUrl);
+          } finally {
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 2000);
+          }
+          pitchWorklet = new AudioWorkletNode(ctx, "nabra-pitch-shift", {
+            numberOfInputs: 1,
+            numberOfOutputs: 1,
+            channelCount: 1,
+            channelCountMode: "explicit",
+            outputChannelCount: [1],
+            processorOptions: { fftSize: pvCfg.fftSize, hop: pvCfg.hop },
+          });
+        } catch {
+          pitchWorklet = null;
+        }
       }
       this.pvFft = pvCfg.fftSize;
       this.pvHop = pvCfg.hop;

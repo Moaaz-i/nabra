@@ -7,7 +7,8 @@
 
 export type VoiceMode = "adaptive" | "manual";
 export type VoiceScale = "chromatic" | "major" | "minor";
-export type LatencyMode = "standard" | "low";
+export type LatencyMode = "fast" | "low" | "standard";
+export type PitchEngineChoice = "vocoder" | "jungle";
 export type PitchMethodChoice = "auto" | "yin" | "mcm";
 export type MicModel = "none" | "sm7b" | "u87" | "c414" | "re20";
 
@@ -52,6 +53,7 @@ export type VoiceSettings = {
   vadEnabled: boolean;
   /** 0 = strict, 1 = permissive. Maps onto the model's probability axis. */
   vadSensitivity: number;
+  pitchEngine: PitchEngineChoice;
   latencyMode: LatencyMode;
   /** Acoustic Echo Cancellation: removes speaker playback sound leaking into mic */
   echoCancellation: boolean;
@@ -128,7 +130,8 @@ export const defaultSettings = (): VoiceSettings => ({
   // exactly, including when the model cannot be loaded at all.
   vadEnabled: true,
   vadSensitivity: 0.5,
-  latencyMode: "standard",
+  pitchEngine: "vocoder",
+  latencyMode: "low",
   echoCancellation: false,
   noiseSuppression: false,
   aiDenoiser: false,
@@ -198,7 +201,8 @@ export const SETTING_ENUMS = {
   mode: ["adaptive", "manual"],
   scale: ["chromatic", "major", "minor"],
   detector: ["auto", "yin", "mcm"],
-  latencyMode: ["standard", "low"],
+  pitchEngine: ["vocoder", "jungle"],
+  latencyMode: ["fast", "low", "standard"],
   micModel: ["none", "sm7b", "u87", "c414", "re20"],
 } as const satisfies Partial<
   Record<keyof VoiceSettings, readonly string[]>
